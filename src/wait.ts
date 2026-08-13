@@ -9,10 +9,16 @@ import type { RunFn } from './run.js';
 /** Mirrors the script's `interval=5` (seconds) between polls. */
 const POLL_INTERVAL_MS = 5_000;
 
-const LINK_LOCAL_PREFIX = '169.254.';
+/** Exported for reuse by `status.ts`'s best-effort single-shot IP check. */
+export const LINK_LOCAL_PREFIX = '169.254.';
 
-/** `"172.16.211.30,fe80::1"` -> `"172.16.211.30"` — mirrors `ip="${ip%%,*}"`. */
-function firstAddress(stdout: string): string {
+/**
+ * `"172.16.211.30,fe80::1"` -> `"172.16.211.30"` — mirrors `ip="${ip%%,*}"`.
+ * Exported for reuse by `status.ts`'s best-effort single-shot IP check (same
+ * `govc vm.ip -a -v4` multi-address stdout shape, just a single poll instead
+ * of a wait loop).
+ */
+export function firstAddress(stdout: string): string {
   return (stdout.split(',')[0] ?? '').trim();
 }
 

@@ -5,7 +5,8 @@
 // by `--confirm` (see `runCreate`'s doc comment). `enroll` (Task 5, in
 // `enroll.ts`) installs/configures/verifies zn-vault-agent over SSH and can
 // be chained automatically from `create --fleet <hostConfig>`. `status`
-// remains a stub.
+// (Task 6, in `status.ts`) reports power/IP/SSH/agent state for an
+// already-provisioned VM. All four subcommands are now implemented.
 
 import type { Command } from 'commander';
 import type { CLIPluginContext } from './plugin-types.js';
@@ -16,12 +17,7 @@ import { resolveTargetHost, resolveTemplate, runValidations, validationSteps } f
 import { createPhases, makeCreateDryRun, type CreatePhase } from './create.js';
 import { waitForIp, waitForSsh } from './wait.js';
 import { runEnroll, type EnrollCommandOptions } from './enroll.js';
-
-/** Stub handler shared by every subcommand whose task hasn't landed yet. */
-function notImplemented(ctx: CLIPluginContext, subcommand: string): void {
-  ctx.output.error(`vsphere ${subcommand}: not implemented yet`);
-  process.exit(1);
-}
+import { runStatus, type StatusOptions } from './status.js';
 
 /** Raw `--flag <value>` strings as commander hands them to the `plan` action. */
 export interface PlanOptions {
@@ -494,6 +490,12 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
 
   vsphere
     .command('status')
-    .description('Report provisioning/enrollment status for a VM')
-    .action(() => notImplemented(ctx, 'status'));
+    .description('Report provisioning/enrollment status for a VM (power, IP, SSH, agent health)')
+    .requiredOption('--name <name>', 'VM name')
+    .option('--ssh-user <user>', 'SSH user for the reachability/agent probes (default: sysadmin)')
+    .option('--ssh-key <path>', 'SSH private key path for the probes (default: ~/.ssh/id_ed25519)')
+    .action(async (opts: StatusOptions) => {
+      const code = await runStatus(ctx, opts);
+      if (code !== 0) process.exit(1);
+    });
 }
