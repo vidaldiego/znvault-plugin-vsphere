@@ -7,7 +7,7 @@ import type { Command } from 'commander';
 import type { CLIPluginContext } from './plugin-types.js';
 import { execRun, requireGovcEnv, type RunFn } from './run.js';
 import type { VmSpec } from './vm-spec.js';
-import { resolveTemplate, runValidations, validationSteps } from './validate.js';
+import { resolveTargetHost, resolveTemplate, runValidations, validationSteps } from './validate.js';
 
 /** Stub handler shared by every subcommand whose task hasn't landed yet. */
 function notImplemented(ctx: CLIPluginContext, subcommand: string): void {
@@ -76,12 +76,13 @@ function buildVmSpec(opts: PlanOptions): VmSpec {
  * itself, so it stays directly unit-testable with a fake `RunFn` — the
  * pattern `znvault-plugin-webdeploy`'s command handlers already use
  * (`prepareResolvedRun`/`buildSummaryLines` in `cli/commands/run.ts`). The
- * `plan` command's `.action()` below sets `process.exitCode` from the
- * result.
+ * `plan` command's `.action()` below is the one-line, untestable-in-process
+ * shim that turns a non-zero result into an actual `process.exit(1)`.
  *
  * Flow (ports script lines 163-368): validate numeric options ->
  * `requireGovcEnv` -> `govc about` (connection check) -> `resolveTemplate`
- * -> `validationSteps` -> `runValidations` per step, printing each step's
+ * -> `resolveTargetHost` (only issues govc calls when `--host` was given) ->
+ * `validationSteps` -> `runValidations` per step, printing each step's
  * label with a checkmark/cross as it resolves -> summary.
  */
 export async function runPlan(
@@ -114,7 +115,15 @@ export async function runPlan(
   }
   ctx.output.info(`Found template: ${templatePath}`);
 
-  const steps = validationSteps(spec, templatePath);
+  let targetHostPath: string | undefined;
+  try {
+    targetHostPath = await resolveTargetHost(run, spec);
+  } catch (error) {
+    ctx.output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  const steps = validationSteps(spec, templatePath, targetHostPath);
   let failedCount = 0;
   for (const step of steps) {
     const { ok, failures } = await runValidations(run, [step]);
@@ -152,7 +161,7 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
     .option('--disk-gb <n>', "Grow the template's single disk before first boot")
     .action(async (opts: PlanOptions) => {
       const code = await runPlan(ctx, opts);
-      if (code !== 0) process.exitCode = code;
+      if (code !== 0) process.exit(1);
     });
 
   vsphere

@@ -16,6 +16,9 @@ import { paths } from './vm-spec.js';
  *  - `expect.equals` set: compare `result.stdout.trim()` against it (mirrors
  *    the script's `[[ "$(govc object.collect ...)" != "value" ]]` checks —
  *    e.g. `summary.accessible` must equal `"true"`).
+ *  - `expect.nonEmpty` set: pass when the first line of `stdout` is
+ *    non-empty (mirrors the script's `[[ -z "$(govc find ... | head -1)" ]]`
+ *    checks — e.g. "does this cluster have at least one host").
  *  - `expect` absent: pass when the command exits 0 (mirrors the script's
  *    `govc object.collect -s "$PATH" name >/dev/null 2>&1` existence checks).
  *  - `invert: true` flips the verdict — used for the name-collision check,
@@ -34,7 +37,7 @@ import { paths } from './vm-spec.js';
 export interface ValidationStep {
   label: string;
   args: string[];
-  expect?: { equals?: string };
+  expect?: { equals?: string; nonEmpty?: boolean };
   failMessage: string;
   invert?: boolean;
   diskGb?: number;
@@ -44,28 +47,29 @@ const BYTES_PER_GB = 1_073_741_824;
 
 /**
  * Builds the read-only validation steps for a spec — ports script lines
- * 301-368 (minus the DRS-placement "no hosts found in cluster" branch at
- * 348-351, which is a *DRS-viability* check with no vSphere-permission or
- * user-facing knob attached to it here; out of scope for this task's
- * read-only preflight per the brief's own checklist):
+ * 301-368 in full:
  *  1. Cluster exists.
  *  2. Datastore exists.
  *  3. Datastore is accessible (`summary.accessible == "true"`).
  *  4. VM folder exists.
  *  5. Network exists — only when `s.network` is set.
  *  6. No naming collision — `paths(s).vm` must NOT already exist (`invert`).
- *  7. If `s.host` is pinned: host `overallStatus == "green"`,
- *     `runtime.connectionState == "connected"`,
- *     `runtime.inMaintenanceMode == "false"` (three checks, one govc call
- *     each, sharing the script's combined failure wording). A `s.host`
- *     starting with `/` is used verbatim (already a govc inventory path,
- *     mirroring the script's `$TARGET_HOST == /*` branch); otherwise it is
- *     resolved as a direct child of the cluster path, the common case for an
- *     ESXi host object.
+ *  7. Host checks — the script's `if [[ -n "$TARGET_HOST" ]] ... elif ...`
+ *     branch (lines 328-351), mutually exclusive:
+ *     - If `targetHostPath` is given (a host was pinned and already resolved
+ *       by `resolveTargetHost`, mirroring how `templatePath` is resolved
+ *       before this function runs): host `overallStatus == "green"`,
+ *       `runtime.connectionState == "connected"`,
+ *       `runtime.inMaintenanceMode == "false"` (three checks, one govc call
+ *       each, sharing the script's combined failure wording).
+ *     - Otherwise (no host pinned — DRS placement): the cluster must have at
+ *       least one host (`govc find <cluster> -type h`, non-empty) — this is
+ *       a target-resource-exists check (an empty cluster is not a valid
+ *       clone target), not a DRS-viability judgment call.
  *  8. If `s.diskGb` is set: the disk-precheck step (see `ValidationStep`'s
  *     doc comment) — this is the only step that needs `templatePath`.
  */
-export function validationSteps(s: VmSpec, templatePath: string): ValidationStep[] {
+export function validationSteps(s: VmSpec, templatePath: string, targetHostPath?: string): ValidationStep[] {
   const p = paths(s);
   const steps: ValidationStep[] = [
     {
@@ -107,29 +111,35 @@ export function validationSteps(s: VmSpec, templatePath: string): ValidationStep
     failMessage: `VM already exists: ${p.vm}`,
   });
 
-  if (s.host) {
-    const hostPath = s.host.startsWith('/') ? s.host : `${p.cluster}/${s.host}`;
-    const hostFailMessage = `Host '${hostPath}' is not green, connected, and out of maintenance`;
+  if (targetHostPath !== undefined) {
+    const hostFailMessage = `Host '${targetHostPath}' is not green, connected, and out of maintenance`;
     steps.push(
       {
-        label: `Host status green (${hostPath})`,
-        args: ['object.collect', '-s', hostPath, 'overallStatus'],
+        label: `Host status green (${targetHostPath})`,
+        args: ['object.collect', '-s', targetHostPath, 'overallStatus'],
         expect: { equals: 'green' },
         failMessage: hostFailMessage,
       },
       {
-        label: `Host connected (${hostPath})`,
-        args: ['object.collect', '-s', hostPath, 'runtime.connectionState'],
+        label: `Host connected (${targetHostPath})`,
+        args: ['object.collect', '-s', targetHostPath, 'runtime.connectionState'],
         expect: { equals: 'connected' },
         failMessage: hostFailMessage,
       },
       {
-        label: `Host out of maintenance (${hostPath})`,
-        args: ['object.collect', '-s', hostPath, 'runtime.inMaintenanceMode'],
+        label: `Host out of maintenance (${targetHostPath})`,
+        args: ['object.collect', '-s', targetHostPath, 'runtime.inMaintenanceMode'],
         expect: { equals: 'false' },
         failMessage: hostFailMessage,
       },
     );
+  } else {
+    steps.push({
+      label: `Cluster has at least one host (${p.cluster})`,
+      args: ['find', p.cluster, '-type', 'h'],
+      expect: { nonEmpty: true },
+      failMessage: `No hosts found in cluster ${s.cluster}`,
+    });
   }
 
   if (s.diskGb !== undefined) {
@@ -181,10 +191,20 @@ function evaluateDiskPrecheck(step: ValidationStep, result: RunResult): string |
   return null;
 }
 
-/** Evaluates every non-disk-precheck step's generic equals/exit-code/invert rule. */
+function firstLine(stdout: string): string {
+  return stdout.split('\n')[0]?.trim() ?? '';
+}
+
+/** Evaluates every non-disk-precheck step's generic equals/nonEmpty/exit-code/invert rule. */
 function evaluateStandardStep(step: ValidationStep, result: RunResult): boolean {
-  const passed =
-    step.expect?.equals !== undefined ? result.stdout.trim() === step.expect.equals : result.code === 0;
+  let passed: boolean;
+  if (step.expect?.equals !== undefined) {
+    passed = result.stdout.trim() === step.expect.equals;
+  } else if (step.expect?.nonEmpty) {
+    passed = firstLine(result.stdout) !== '';
+  } else {
+    passed = result.code === 0;
+  }
   return step.invert ? !passed : passed;
 }
 
@@ -215,10 +235,6 @@ export async function runValidations(
   return { ok: failures.length === 0, failures };
 }
 
-function firstLine(stdout: string): string {
-  return stdout.split('\n')[0]?.trim() ?? '';
-}
-
 /**
  * Resolves the template's inventory path — ports script lines 286-298:
  * `govc find <dc> -type m -name <template>`, taking the first line; if that
@@ -238,4 +254,40 @@ export async function resolveTemplate(run: RunFn, s: VmSpec): Promise<string> {
   if (vmMatch) return vmMatch;
 
   throw new Error(`Template '${s.template}' not found in ${s.datacenter}`);
+}
+
+/**
+ * Resolves `--host` into an absolute govc inventory path anchored under the
+ * cluster — ports script lines 328-341. Returns `undefined` when `s.host` is
+ * not set (no host pinned — DRS placement; `validationSteps` then adds the
+ * "cluster has at least one host" check instead). An `s.host` starting with
+ * `/` is used verbatim (already a govc inventory path, mirroring the
+ * script's `$TARGET_HOST == /*` branch); otherwise it's resolved via `govc
+ * find <cluster> -type h -name <host>` (first line). Either way, the
+ * resolved path must be non-empty, anchored under `<cluster>/`, and resolve
+ * to a real object (`object.collect -s <path> name` succeeds) — failing any
+ * of those throws the script's own diagnosis, `Host '<host>' not found in
+ * cluster <cluster>` (naming the raw `--host` value the caller passed, not
+ * the resolved path, matching the script's `$TARGET_HOST` in that message).
+ * This must run before `validationSteps` (mirroring how `resolveTemplate`
+ * runs before it) because the green/connected/maintenance checks need the
+ * already-resolved path as an input — `validationSteps` never issues a govc
+ * call to resolve anything itself.
+ */
+export async function resolveTargetHost(run: RunFn, s: VmSpec): Promise<string | undefined> {
+  if (!s.host) return undefined;
+
+  const p = paths(s);
+  const hostPath = s.host.startsWith('/')
+    ? s.host
+    : firstLine((await run('govc', ['find', p.cluster, '-type', 'h', '-name', s.host])).stdout);
+
+  const anchored = hostPath !== '' && hostPath.startsWith(`${p.cluster}/`);
+  const exists = anchored && (await run('govc', ['object.collect', '-s', hostPath, 'name'])).code === 0;
+
+  if (!exists) {
+    throw new Error(`Host '${s.host}' not found in cluster ${s.cluster}`);
+  }
+
+  return hostPath;
 }

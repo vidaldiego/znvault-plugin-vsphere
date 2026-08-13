@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import type { RunFn, RunResult } from '../src/run.js';
 import type { VmSpec } from '../src/vm-spec.js';
 import { paths } from '../src/vm-spec.js';
-import { validationSteps, runValidations, resolveTemplate } from '../src/validate.js';
+import { validationSteps, runValidations, resolveTemplate, resolveTargetHost } from '../src/validate.js';
 
 const base: VmSpec = {
   name: 'trust-api-1',
@@ -36,9 +36,14 @@ function fakeRun(responses: Record<string, RunResult>): RunFn {
 
 const ok = (stdout: string): RunResult => ({ code: 0, stdout, stderr: '' });
 const notFound = (): RunResult => ({ code: 1, stdout: '', stderr: 'not found' });
+const empty = (): RunResult => ({ code: 0, stdout: '', stderr: '' });
+
+/** Canned response for the "cluster has at least one host" step, reused by every
+ * test that exercises the full no-host-pinned step list. */
+const clusterHasHosts = { [`find ${p.cluster} -type h`]: ok('esx1.example.com\n') };
 
 describe('validationSteps', () => {
-  it('produces cluster/datastore/folder/network/collision checks for a spec with a network and no host', () => {
+  it('produces cluster/datastore/folder/network/collision/no-host checks for a spec with a network and no host', () => {
     const steps = validationSteps(base, templatePath);
 
     expect(steps).toEqual([
@@ -74,6 +79,12 @@ describe('validationSteps', () => {
         invert: true,
         failMessage: `VM already exists: ${p.vm}`,
       },
+      {
+        label: `Cluster has at least one host (${p.cluster})`,
+        args: ['find', p.cluster, '-type', 'h'],
+        expect: { nonEmpty: true },
+        failMessage: `No hosts found in cluster ${base.cluster}`,
+      },
     ]);
   });
 
@@ -82,11 +93,20 @@ describe('validationSteps', () => {
     expect(steps.some((s) => s.label.startsWith('Network exists'))).toBe(false);
   });
 
-  it('appends host green/connected/not-in-maintenance checks when a host is pinned', () => {
-    const steps = validationSteps({ ...base, host: 'esx1' }, templatePath);
-    const hostPath = `${p.cluster}/esx1`;
+  it('adds the "cluster has at least one host" step when no host is targeted (targetHostPath undefined)', () => {
+    const steps = validationSteps(base, templatePath);
+    const last = steps.at(-1)!;
+    expect(last.args).toEqual(['find', p.cluster, '-type', 'h']);
+    expect(last.expect).toEqual({ nonEmpty: true });
+    expect(last.failMessage).toBe(`No hosts found in cluster ${base.cluster}`);
+  });
+
+  it('appends host green/connected/not-in-maintenance checks (not the no-host check) when targetHostPath is given', () => {
+    const hostPath = `${p.cluster}/esx1.example.com`;
+    const steps = validationSteps(base, templatePath, hostPath);
     const hostFailMessage = `Host '${hostPath}' is not green, connected, and out of maintenance`;
 
+    expect(steps.some((s) => s.label.startsWith('Cluster has at least one host'))).toBe(false);
     expect(steps.slice(-3)).toEqual([
       {
         label: `Host status green (${hostPath})`,
@@ -107,12 +127,6 @@ describe('validationSteps', () => {
         failMessage: hostFailMessage,
       },
     ]);
-  });
-
-  it('uses an absolute --host value verbatim instead of nesting it under the cluster path', () => {
-    const steps = validationSteps({ ...base, host: '/ZincApp/host/Primary/esx1' }, templatePath);
-    expect(steps.some((s) => s.args.includes('/ZincApp/host/Primary/esx1'))).toBe(true);
-    expect(steps.some((s) => s.args.includes(`${p.cluster}//ZincApp/host/Primary/esx1`))).toBe(false);
   });
 
   it('appends a disk precheck step (device.info -json) only when --disk-gb is given', () => {
@@ -137,6 +151,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: ok('vm\n'),
       [`object.collect -s ${p.dc}/network/VM Network name`]: ok('VM Network\n'),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -151,6 +166,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: ok('vm\n'),
       [`object.collect -s ${p.dc}/network/VM Network name`]: ok('VM Network\n'),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -166,6 +182,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: ok('vm\n'),
       [`object.collect -s ${p.dc}/network/VM Network name`]: ok('VM Network\n'),
       [`object.collect -s ${p.vm} name`]: ok('trust-api-1\n'),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -181,6 +198,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: ok('vm\n'),
       [`object.collect -s ${p.dc}/network/VM Network name`]: ok('VM Network\n'),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -195,6 +213,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: notFound(),
       [`object.collect -s ${p.dc}/network/VM Network name`]: ok('VM Network\n'),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -209,6 +228,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: ok('vm\n'),
       [`object.collect -s ${p.dc}/network/VM Network name`]: notFound(),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      ...clusterHasHosts,
     });
 
     const result = await runValidations(run, steps);
@@ -223,6 +243,7 @@ describe('runValidations', () => {
       [`object.collect -s ${p.folder} name`]: notFound(),
       [`object.collect -s ${p.dc}/network/VM Network name`]: notFound(),
       [`object.collect -s ${p.vm} name`]: notFound(),
+      [`find ${p.cluster} -type h`]: empty(),
     });
 
     const result = await runValidations(run, steps);
@@ -231,9 +252,26 @@ describe('runValidations', () => {
   });
 });
 
+describe('runValidations — cluster has at least one host', () => {
+  const step = validationSteps(base, templatePath).at(-1)!;
+
+  it('passes when `govc find <cluster> -type h` returns at least one line', async () => {
+    const run = fakeRun({ [`find ${p.cluster} -type h`]: ok('esx1.example.com\nesx2.example.com\n') });
+    const result = await runValidations(run, [step]);
+    expect(result).toEqual({ ok: true, failures: [] });
+  });
+
+  it('fails with the script\'s message when the cluster has zero hosts', async () => {
+    const run = fakeRun({ [`find ${p.cluster} -type h`]: empty() });
+    const result = await runValidations(run, [step]);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual([`No hosts found in cluster ${base.cluster}`]);
+  });
+});
+
 describe('runValidations — host checks', () => {
-  const hostSteps = validationSteps({ ...base, network: undefined, host: 'esx1' }, templatePath);
   const hostPath = `${p.cluster}/esx1`;
+  const hostSteps = validationSteps({ ...base, network: undefined, host: 'esx1' }, templatePath, hostPath);
 
   it('host green + connected + out of maintenance -> passes', async () => {
     const run = fakeRun({
@@ -364,6 +402,62 @@ describe('resolveTemplate', () => {
 
     await expect(resolveTemplate(run, base)).rejects.toThrow(
       new RegExp(`${base.template}.*${base.datacenter}`),
+    );
+  });
+});
+
+describe('resolveTargetHost', () => {
+  it('returns undefined when no --host was requested', async () => {
+    const run = fakeRun({});
+    await expect(resolveTargetHost(run, base)).resolves.toBeUndefined();
+  });
+
+  it('resolves a bare host name via `govc find -type h -name`, anchored under the cluster', async () => {
+    const hostPath = `${p.cluster}/esx1.example.com`;
+    const run = fakeRun({
+      [`find ${p.cluster} -type h -name esx1`]: ok(`${hostPath}\n`),
+      [`object.collect -s ${hostPath} name`]: ok('esx1.example.com\n'),
+    });
+
+    await expect(resolveTargetHost(run, { ...base, host: 'esx1' })).resolves.toBe(hostPath);
+  });
+
+  it('uses an absolute --host path verbatim, without calling `govc find`', async () => {
+    const hostPath = `${p.cluster}/esx1.example.com`;
+    const run = fakeRun({
+      [`object.collect -s ${hostPath} name`]: ok('esx1.example.com\n'),
+    });
+
+    await expect(resolveTargetHost(run, { ...base, host: hostPath })).resolves.toBe(hostPath);
+  });
+
+  it('throws "not found in cluster" when `govc find` comes up empty', async () => {
+    const run = fakeRun({ [`find ${p.cluster} -type h -name ghost`]: empty() });
+
+    await expect(resolveTargetHost(run, { ...base, host: 'ghost' })).rejects.toThrow(
+      `Host 'ghost' not found in cluster ${base.cluster}`,
+    );
+  });
+
+  it('throws "not found in cluster" when the resolved host is outside the cluster path', async () => {
+    const outsidePath = '/ZincApp/host/OtherCluster/esx1.example.com';
+    const run = fakeRun({
+      [`find ${p.cluster} -type h -name esx1`]: ok(`${outsidePath}\n`),
+    });
+
+    await expect(resolveTargetHost(run, { ...base, host: 'esx1' })).rejects.toThrow(
+      `Host 'esx1' not found in cluster ${base.cluster}`,
+    );
+  });
+
+  it('throws "not found in cluster" when an absolute --host path is anchored but does not resolve to a real object', async () => {
+    const hostPath = `${p.cluster}/ghost.example.com`;
+    const run = fakeRun({
+      [`object.collect -s ${hostPath} name`]: notFound(),
+    });
+
+    await expect(resolveTargetHost(run, { ...base, host: hostPath })).rejects.toThrow(
+      `Host '${hostPath}' not found in cluster ${base.cluster}`,
     );
   });
 });

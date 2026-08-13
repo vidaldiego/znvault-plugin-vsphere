@@ -45,7 +45,9 @@ function fakeCtx() {
   };
 }
 
-/** All-green fakeRun: `govc about`, template resolution, every check passes. */
+/** All-green fakeRun: `govc about`, template resolution, every check passes.
+ * `opts` pins no `--host`, so `validationSteps` appends the "cluster has at
+ * least one host" check instead of host property checks — canned here too. */
 function fakeRunAllGreen(): RunFn {
   const responses: Record<string, RunResult> = {
     about: ok(''),
@@ -55,6 +57,7 @@ function fakeRunAllGreen(): RunFn {
     [`object.collect -s ${p.datastore} summary.accessible`]: ok('true\n'),
     [`object.collect -s ${p.folder} name`]: ok('vm\n'),
     [`object.collect -s ${p.vm} name`]: notFound(),
+    [`find ${p.cluster} -type h`]: ok('esx1.example.com\n'),
   };
   return async (_cmd, args) => {
     const key = args.join(' ');
@@ -186,5 +189,62 @@ describe('runPlan', () => {
 
     expect(code).toBe(1);
     expect(error.some((l) => l.includes('cannot shrink the 100GB template disk'))).toBe(true);
+  });
+
+  it('no --host given, cluster has zero hosts: fails with the script\'s "No hosts found" message', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, error } = fakeCtx();
+    const run = fakeRunAllGreen();
+    const noHosts: RunFn = async (cmd, args) => {
+      if (args.join(' ') === `find ${p.cluster} -type h`) return ok('');
+      return run(cmd, args);
+    };
+
+    const code = await runPlan(ctx, opts, noHosts);
+
+    expect(code).toBe(1);
+    expect(error.some((l) => l.includes(`No hosts found in cluster ${opts.cluster}`))).toBe(true);
+  });
+
+  it('--host pinned and resolved: runs the green/connected/maintenance checks instead of the no-host check, and passes', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, error, success } = fakeCtx();
+    const hostPath = `${p.cluster}/esx1.example.com`;
+    const run = fakeRunAllGreen();
+    const withHost: RunFn = async (cmd, args) => {
+      const key = args.join(' ');
+      if (key === `find ${p.cluster} -type h -name esx1`) return ok(`${hostPath}\n`);
+      if (key === `object.collect -s ${hostPath} name`) return ok('esx1.example.com\n');
+      if (key === `object.collect -s ${hostPath} overallStatus`) return ok('green\n');
+      if (key === `object.collect -s ${hostPath} runtime.connectionState`) return ok('connected\n');
+      if (key === `object.collect -s ${hostPath} runtime.inMaintenanceMode`) return ok('false\n');
+      // The no-host "cluster has at least one host" step must NOT run once a host is pinned.
+      if (key === `find ${p.cluster} -type h`) {
+        throw new Error('unexpected: no-host check ran despite --host being pinned');
+      }
+      return run(cmd, args);
+    };
+
+    const code = await runPlan(ctx, { ...opts, host: 'esx1' }, withHost);
+
+    expect(code).toBe(0);
+    expect(error).toEqual([]);
+    expect(success.some((l) => l.includes('Plan validation passed'))).toBe(true);
+  });
+
+  it('--host pinned but not found in cluster: bails early with the resolution error, before any per-step output', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, error, info } = fakeCtx();
+    const run = fakeRunAllGreen();
+    const hostNotFound: RunFn = async (cmd, args) => {
+      if (args.join(' ') === `find ${p.cluster} -type h -name ghost`) return ok('');
+      return run(cmd, args);
+    };
+
+    const code = await runPlan(ctx, { ...opts, host: 'ghost' }, hostNotFound);
+
+    expect(code).toBe(1);
+    expect(error).toEqual([`Host 'ghost' not found in cluster ${opts.cluster}`]);
+    expect(info.some((l) => l.includes('✓') || l.includes('✗'))).toBe(false);
   });
 });
