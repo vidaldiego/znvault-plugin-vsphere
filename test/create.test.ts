@@ -10,6 +10,7 @@ import type { VmSpec } from '../src/vm-spec.js';
 import { paths } from '../src/vm-spec.js';
 import { createPhases, makeCreateDryRun } from '../src/create.js';
 import { runCreate, type CreateOptions } from '../src/commands.js';
+import type { runEnroll } from '../src/enroll.js';
 
 const baseSpec: VmSpec = {
   name: 'trust-api-1',
@@ -455,6 +456,106 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
     expect(sshCalled).toBe(false);
     expect(error.some((l) => /timeout/i.test(l))).toBe(true);
     expect(info.some((l) => l.includes('VM created but bootstrap not run'))).toBe(true);
+  });
+});
+
+describe('runCreate — --fleet chaining decision (not the enrollment pipeline itself, see enroll.test.ts)', () => {
+  afterEachRestoreGovcUrl();
+
+  function fakeRunFullFlow(): RunFn {
+    const green = fakeRunAllGreen();
+    return async (cmd, args) => {
+      if (cmd === 'govc' && args[0] === 'vm.clone') return ok();
+      if (cmd === 'govc' && args[0] === 'vm.power') return ok();
+      if (cmd === 'govc' && args[0] === 'vm.ip') return ok('172.16.211.30');
+      if (cmd === 'ssh') return ok('ok');
+      return green(cmd, args);
+    };
+  }
+
+  /** Records every invocation instead of doing real enrollment work — this suite only asserts whether/with-what-args it's called, not its internals (see enroll.test.ts for those). */
+  function fakeEnroll(result: number): { enroll: typeof runEnroll; calls: unknown[][] } {
+    const calls: unknown[][] = [];
+    const enroll: typeof runEnroll = async (ctxArg, optsArg, runArg) => {
+      calls.push([ctxArg, optsArg, runArg]);
+      return result;
+    };
+    return { enroll, calls };
+  }
+
+  it('no --fleet: enroll is never called, and the summary reports "skipped (no --fleet)"', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, info } = fakeCtx();
+    const { enroll, calls } = fakeEnroll(0);
+
+    const code = await runCreate(ctx, { ...opts, confirm: opts.name }, fakeRunFullFlow(), noopSleepMs, enroll);
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(info.some((l) => l.includes('skipped (no --fleet)'))).toBe(true);
+  });
+
+  it('--fleet given but bootstrap failed: enroll is never called, a warning is shown, and the summary says so', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, error, info, warn } = fakeCtx();
+    const { enroll, calls } = fakeEnroll(0);
+    const run: RunFn = async (cmd, args) => {
+      if (cmd === 'ssh' && isSshProbe(args)) return ok('ok');
+      if (cmd === 'ssh') return { code: 7, stdout: '', stderr: 'bootstrap script failed' };
+      return fakeRunFullFlow()(cmd, args);
+    };
+
+    const code = await runCreate(ctx, { ...opts, confirm: opts.name, fleet: 'trust-fleet' }, run, noopSleepMs, enroll);
+
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect(error.some((l) => l.includes('7'))).toBe(true);
+    expect(warn.some((l) => l.includes('trust-fleet') && l.includes('skipping enrollment'))).toBe(true);
+    expect(info.some((l) => l.includes('skipped (bootstrap failed)'))).toBe(true);
+  });
+
+  it('--fleet given and bootstrap succeeded: enroll is called once with {fleet, name, ip, sshUser, sshKey}, and success propagates (exit 0, "enrolled")', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, info } = fakeCtx();
+    const { enroll, calls } = fakeEnroll(0);
+
+    const code = await runCreate(
+      ctx,
+      { ...opts, confirm: opts.name, fleet: 'trust-fleet' },
+      fakeRunFullFlow(),
+      noopSleepMs,
+      enroll,
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    const [, enrollOpts] = calls[0]!;
+    expect(enrollOpts).toEqual({
+      fleet: 'trust-fleet',
+      name: 'trust-api-1',
+      ip: '172.16.211.30',
+      sshUser: 'sysadmin',
+      sshKey: '~/.ssh/id_ed25519',
+    });
+    expect(info.some((l) => l.includes('Agent: enrolled'))).toBe(true);
+  });
+
+  it('--fleet given, bootstrap succeeded, but enrollment fails: exit code is 1 and the summary says "enrollment failed"', async () => {
+    process.env.GOVC_URL = 'https://vcenter.test';
+    const { ctx, info } = fakeCtx();
+    const { enroll, calls } = fakeEnroll(1);
+
+    const code = await runCreate(
+      ctx,
+      { ...opts, confirm: opts.name, fleet: 'trust-fleet' },
+      fakeRunFullFlow(),
+      noopSleepMs,
+      enroll,
+    );
+
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(info.some((l) => l.includes('Agent: enrollment failed'))).toBe(true);
   });
 });
 

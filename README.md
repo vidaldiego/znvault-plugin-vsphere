@@ -19,8 +19,9 @@ znvault vsphere enroll    # Enroll a provisioned VM with zn-vault-agent
 znvault vsphere status    # Report provisioning/enrollment status
 ```
 
-All four subcommands are stubs in this initial scaffold — see the
-project's `.superpowers/sdd/` task list for the tasks that fill them in.
+`plan`, `create`, and `enroll` are implemented; `status` remains a stub —
+see the project's `.superpowers/sdd/` task list for the task that fills it
+in.
 
 ## Development
 

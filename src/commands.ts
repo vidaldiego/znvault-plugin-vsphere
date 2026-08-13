@@ -2,8 +2,10 @@
 // Registers the `znvault vsphere <sub>` subcommands. `plan` (Task 3) is a
 // real, read-only preflight. `create` (Task 4) reuses that preflight, then
 // clones/configures/powers on the VM and waits for it to come up — guarded
-// by `--confirm` (see `runCreate`'s doc comment). `enroll`/`status` remain
-// stubs for Task 5.
+// by `--confirm` (see `runCreate`'s doc comment). `enroll` (Task 5, in
+// `enroll.ts`) installs/configures/verifies zn-vault-agent over SSH and can
+// be chained automatically from `create --fleet <hostConfig>`. `status`
+// remains a stub.
 
 import type { Command } from 'commander';
 import type { CLIPluginContext } from './plugin-types.js';
@@ -13,6 +15,7 @@ import { bootstrapCommand, paths } from './vm-spec.js';
 import { resolveTargetHost, resolveTemplate, runValidations, validationSteps } from './validate.js';
 import { createPhases, makeCreateDryRun, type CreatePhase } from './create.js';
 import { waitForIp, waitForSsh } from './wait.js';
+import { runEnroll, type EnrollCommandOptions } from './enroll.js';
 
 /** Stub handler shared by every subcommand whose task hasn't landed yet. */
 function notImplemented(ctx: CLIPluginContext, subcommand: string): void {
@@ -154,7 +157,7 @@ export async function runPlan(
  * action — superset of `PlanOptions` (create runs `plan`'s preflight
  * first) plus the fields the proven script's apply phase needs: static
  * network config, CA trust toggles, SSH/timeout overrides, the execution
- * guard (`--confirm`), and the Task-5 fleet-enrollment hook.
+ * guard (`--confirm`), and the fleet-enrollment chaining hook.
  */
 export interface CreateOptions extends PlanOptions {
   staticIp?: string;
@@ -174,8 +177,12 @@ export interface CreateOptions extends PlanOptions {
   sshUser?: string;
   sshKey?: string;
   timeoutMinutes?: string;
-  /** After a successful bootstrap, chain into Task 5's fleet enrollment (TODO — not implemented yet). */
-  fleet?: boolean;
+  /**
+   * After a successful bootstrap, chain into `enroll` against this fleet
+   * (host config) name — the same value `enroll --fleet` takes. Omitted
+   * means no enrollment is attempted.
+   */
+  fleet?: string;
   /** Must equal `--name` exactly to execute; omitted means dry-run preview only. */
   confirm?: string;
 }
@@ -246,7 +253,7 @@ async function previewCreate(ctx: CLIPluginContext, spec: VmSpec, phases: Create
  * script *before* `EXIT_CODE` is ever read) — so a failed bootstrap was
  * reported as generic script failure with no distinct "VM created but
  * bootstrap failed" outcome. Here the exit code is captured and always
- * surfaced, with a concrete retry hint (`enroll --retry-bootstrap`, Task 5).
+ * surfaced, with a concrete retry hint (`enroll --retry-bootstrap`).
  */
 async function executeCreate(
   ctx: CLIPluginContext,
@@ -254,7 +261,8 @@ async function executeCreate(
   phases: CreatePhase[],
   run: RunFn,
   sleep: (ms: number) => Promise<void>,
-  fleet: boolean | undefined,
+  fleet: string | undefined,
+  enroll: typeof runEnroll,
 ): Promise<number> {
   const p = paths(spec);
 
@@ -308,13 +316,28 @@ async function executeCreate(
     ctx.output.error(`Bootstrap exited with code ${bootstrapResult.code}`);
   }
 
-  // TODO(Task 5): once the fleet-enrollment module exists, chain into it
-  // here when `--fleet` was given, and fold its ok/fail into the summary
-  // below instead of just pointing at the manual command.
-  let agentStatus = 'skipped (no --fleet)';
-  if (fleet) {
-    agentStatus = 'not attempted — fleet enrollment is not implemented yet (Task 5)';
-    ctx.output.warn("--fleet was given, but fleet enrollment isn't implemented yet. Run 'znvault vsphere enroll' manually once it lands.");
+  // Chain into `enroll` when `--fleet <hostConfig>` was given — but only
+  // once bootstrap actually succeeded; enrolling a VM whose bootstrap
+  // (SSH-CA/PKI-CA trust, hostname, network) never completed would just
+  // fail at the first SSH step for a worse-understood reason.
+  let agentStatus: string;
+  let enrollOk = true;
+  if (fleet === undefined) {
+    agentStatus = 'skipped (no --fleet)';
+  } else if (!bootstrapOk) {
+    agentStatus = 'skipped (bootstrap failed)';
+    ctx.output.warn(
+      `--fleet ${fleet} was given, but bootstrap failed — skipping enrollment. Run 'znvault vsphere enroll --fleet ${fleet} --name ${spec.name} --ip ${ip}' manually once bootstrap is fixed.`,
+    );
+  } else {
+    ctx.output.info(`Chaining into enrollment (--fleet ${fleet})...`);
+    const enrollCode = await enroll(
+      ctx,
+      { fleet, name: spec.name, ip, sshUser: spec.sshUser, sshKey: spec.sshKey },
+      run,
+    );
+    enrollOk = enrollCode === 0;
+    agentStatus = enrollOk ? 'enrolled' : 'enrollment failed';
   }
 
   ctx.output.info('Summary:');
@@ -325,6 +348,10 @@ async function executeCreate(
 
   if (!bootstrapOk) {
     ctx.output.info('Retry bootstrap with: znvault vsphere enroll --retry-bootstrap');
+    return 1;
+  }
+
+  if (!enrollOk) {
     return 1;
   }
 
@@ -349,6 +376,7 @@ export async function runCreate(
   opts: CreateOptions,
   run: RunFn = execRun,
   sleep: (ms: number) => Promise<void> = realSleep,
+  enroll: typeof runEnroll = runEnroll,
 ): Promise<number> {
   if (opts.confirm !== undefined && opts.confirm !== opts.name) {
     ctx.output.error(
@@ -388,7 +416,7 @@ export async function runCreate(
     return previewCreate(ctx, spec, phases);
   }
 
-  return executeCreate(ctx, spec, phases, run, sleep, opts.fleet);
+  return executeCreate(ctx, spec, phases, run, sleep, opts.fleet, enroll);
 }
 
 export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext): void {
@@ -436,7 +464,7 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
     .option('--ssh-user <user>', 'SSH user for bootstrap (default: sysadmin)')
     .option('--ssh-key <path>', 'SSH private key path for bootstrap (default: ~/.ssh/id_ed25519)')
     .option('--timeout-minutes <n>', 'Minutes to wait for IP/SSH before giving up (default: 10)')
-    .option('--fleet', 'After a successful bootstrap, chain into fleet enrollment (Task 5 — not yet implemented)')
+    .option('--fleet <hostConfig>', 'After a successful bootstrap, chain into fleet enrollment against this host config')
     .option('--confirm <name>', 'Must exactly equal --name to execute; omit for a dry-run preview')
     .action(async (opts: CreateOptions) => {
       const code = await runCreate(ctx, opts);
@@ -445,8 +473,24 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
 
   vsphere
     .command('enroll')
-    .description('Enroll a provisioned VM with zn-vault-agent')
-    .action(() => notImplemented(ctx, 'enroll'));
+    .description('Enroll a provisioned VM with zn-vault-agent (installs, configures, and verifies the agent over SSH)')
+    .requiredOption('--fleet <hostConfig>', 'Host config (fleet) to request the bootstrap token against')
+    .requiredOption('--name <name>', 'VM name / agent hostname')
+    .requiredOption('--ip <ip>', 'VM IP address to SSH into')
+    .option('--ssh-user <user>', 'SSH user (default: sysadmin)')
+    .option('--ssh-key <path>', 'SSH private key path (default: ~/.ssh/id_ed25519)')
+    .option('--agent-version <version>', 'zn-vault-agent npm version to install (default: latest)')
+    .option('--retry-bootstrap', 'Re-run the bootstrap-vm install script over SSH before enrolling')
+    .option('--static-ip <cidr>', 'Static IP in CIDR form (only used with --retry-bootstrap)')
+    .option('--gateway <ip>', 'Default gateway (only used with --retry-bootstrap)')
+    .option('--dns <servers>', 'Comma-separated DNS servers (only used with --retry-bootstrap)')
+    .option('--skip-ssh-ca', 'Skip SSH CA trust configuration (only used with --retry-bootstrap)')
+    .option('--skip-pki-ca', 'Skip PKI CA trust configuration (only used with --retry-bootstrap)')
+    .option('--bootstrap-args <args>', 'Extra raw args passed through to bootstrap-vm.sh (only used with --retry-bootstrap)')
+    .action(async (opts: EnrollCommandOptions) => {
+      const code = await runEnroll(ctx, opts);
+      if (code !== 0) process.exit(1);
+    });
 
   vsphere
     .command('status')
