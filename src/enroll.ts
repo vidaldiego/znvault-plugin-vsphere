@@ -104,7 +104,10 @@ export function enrollScript(vaultUrl: string, token: string, hostname: string, 
     'sudo zn-vault-agent setup -y',
     `sudo zn-vault-agent login --url ${vaultUrl} --bootstrap-token ${token} --host-name ${hostname}`,
     'sudo chown -R zn-vault-agent:zn-vault-agent /etc/zn-vault-agent /var/lib/zn-vault-agent',
-    "printf '[Service]\\nRuntimeDirectory=zn-vault-agent\\nRuntimeDirectoryMode=0755\\n' | sudo tee /etc/systemd/system/zn-vault-agent.service.d/runtime-dir.conf >/dev/null && sudo systemctl daemon-reload",
+    // The drop-in directory does not exist on a fresh node — tee cannot create
+    // parent dirs (found live on trust-api-1, 2026-08-13; the runbook's node
+    // happened to have the directory already).
+    "sudo mkdir -p /etc/systemd/system/zn-vault-agent.service.d && printf '[Service]\\nRuntimeDirectory=zn-vault-agent\\nRuntimeDirectoryMode=0755\\n' | sudo tee /etc/systemd/system/zn-vault-agent.service.d/runtime-dir.conf >/dev/null && sudo systemctl daemon-reload",
     'sudo systemctl restart zn-vault-agent',
     `sudo systemctl is-active zn-vault-agent && curl -sf ${AGENT_HEALTH_URL}`,
   ];

@@ -141,6 +141,9 @@ describe('enrollScript', () => {
     const steps = enrollScript(vaultUrl, RAW_TOKEN, hostname);
     expect(steps[5]).toContain('RuntimeDirectory=zn-vault-agent');
     expect(steps[5]).toContain('/etc/systemd/system/zn-vault-agent.service.d/runtime-dir.conf');
+    // Regression guard (live failure on trust-api-1): the drop-in parent dir
+    // must be created before tee writes into it.
+    expect(steps[5]).toMatch(/^sudo mkdir -p \/etc\/systemd\/system\/zn-vault-agent\.service\.d && /);
     expect(steps[5]).toContain('systemctl daemon-reload');
   });
 
