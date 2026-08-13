@@ -154,9 +154,33 @@ export function validationSteps(s: VmSpec, templatePath: string, targetHostPath?
   return steps;
 }
 
-/** Parsed shape of `govc device.info -json ... 'disk-*'` (fields we use only). */
-interface TemplateDiskInfo {
-  devices?: Array<{ capacityInBytes?: number }>;
+/**
+ * Parsed shape of a single device entry from `govc device.info -json ...
+ * 'disk-*'` (fields consumed across the codebase: this module's disk
+ * precheck needs `capacityInBytes`, `create.ts`'s grow-disk phase needs
+ * `key`).
+ */
+export interface DiskDeviceInfo {
+  key?: number;
+  capacityInBytes?: number;
+}
+
+/**
+ * Parses `govc device.info -json ... 'disk-*'` stdout into its `devices`
+ * array. Returns `null` on unparseable JSON so callers can fail closed
+ * without throwing. Shared by this module's disk precheck (template disk,
+ * evaluated against `--disk-gb`) and `create.ts`'s grow-disk phase (the
+ * clone's disk, evaluated for the single-disk-only resize rule) — the JSON
+ * shape and parsing is identical; only the pass/fail rule differs per call
+ * site, so only the parsing is factored out here.
+ */
+export function parseDiskDevicesJson(stdout: string): DiskDeviceInfo[] | null {
+  try {
+    const parsed = JSON.parse(stdout) as { devices?: DiskDeviceInfo[] };
+    return parsed.devices ?? [];
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -169,14 +193,9 @@ interface TemplateDiskInfo {
 function evaluateDiskPrecheck(step: ValidationStep, result: RunResult): string | null {
   if (result.code !== 0) return step.failMessage;
 
-  let parsed: TemplateDiskInfo;
-  try {
-    parsed = JSON.parse(result.stdout) as TemplateDiskInfo;
-  } catch {
-    return step.failMessage;
-  }
+  const devices = parseDiskDevicesJson(result.stdout);
+  if (devices === null) return step.failMessage;
 
-  const devices = parsed.devices ?? [];
   if (devices.length !== 1) {
     return `--disk-gb requires a template with exactly one disk (found ${devices.length})`;
   }
