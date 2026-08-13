@@ -32,10 +32,22 @@ export type RunFn = (
  * binary is not on PATH) is captured into the resolved `RunResult` — a spawn
  * error resolves with `code: -1` and the error message in `stderr`.
  */
+/**
+ * `execFile`'s own default `maxBuffer` is 1 MiB — too small for a real
+ * remote bootstrap transcript (`create`'s SSH-piped install script easily
+ * exceeds it). Exceeding the default doesn't surface as a distinct error:
+ * Node kills the child and `execFile` reports it as a spawn failure (a
+ * non-numeric `error.code`), which `execRun` resolves as `code: -1` — the
+ * exact same shape as "binary not on PATH". That misdiagnoses the plugin's
+ * core create/enroll flow as an unrelated spawn problem. 64 MiB comfortably
+ * covers any bootstrap/enrollment transcript this plugin produces.
+ */
+const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 export const execRun: RunFn = (cmd, args, opts) =>
   new Promise((resolve) => {
     const env = opts?.env ? { ...process.env, ...opts.env } : process.env;
-    execFile(cmd, args, { env }, (error: ExecFileException | null, stdout, stderr) => {
+    execFile(cmd, args, { env, maxBuffer: MAX_BUFFER_BYTES }, (error: ExecFileException | null, stdout, stderr) => {
       if (!error) {
         resolve({ code: 0, stdout: stdout.toString(), stderr: stderr.toString() });
         return;

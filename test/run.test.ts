@@ -96,4 +96,23 @@ describe('execRun', () => {
     ]);
     expect(result.stdout).toBe('$(echo pwned); rm -rf /');
   });
+
+  it(
+    'captures output larger than execFile\'s default 1 MiB maxBuffer intact, with code 0 ' +
+      '(pins the fix: the old default kills the child on overflow, which execRun would ' +
+      'otherwise misreport as a spawn failure — code -1 — exactly like a missing binary; ' +
+      'a real remote bootstrap transcript routinely exceeds 1 MiB)',
+    async () => {
+      const ONE_MIB = 1024 * 1024;
+      const size = ONE_MIB + 512 * 1024; // 1.5 MiB — comfortably past the old 1 MiB default
+      const result = await execRun(process.execPath, [
+        '-e',
+        `process.stdout.write('a'.repeat(${size}))`,
+      ]);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout.length).toBe(size);
+      expect(result.stdout).toBe('a'.repeat(size));
+    },
+  );
 });
