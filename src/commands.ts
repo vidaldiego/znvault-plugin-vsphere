@@ -11,6 +11,7 @@
 import type { Command } from 'commander';
 import type { CLIPluginContext } from './plugin-types.js';
 import { execRun, requireGovcEnv, type RunFn } from './run.js';
+import { resolveSshKey } from './ssh-key.js';
 import type { VmSpec } from './vm-spec.js';
 import { bootstrapCommand, paths } from './vm-spec.js';
 import { resolveTargetHost, resolveTemplate, runValidations, validationSteps } from './validate.js';
@@ -366,6 +367,15 @@ async function executeCreate(
  * `--confirm <value>` that does not equal `--name` exactly is an error,
  * checked first, before `requireGovcEnv` or any other work — a typo'd
  * `--confirm` must never touch vCenter, not even a read-only call.
+ *
+ * SSH-key preflight placement (spec decision, final-review fix wave item 3):
+ * `resolveSshKey` runs unconditionally at options-parse time, alongside
+ * `requireGovcEnv` — not gated on `--confirm`. The costliest failure mode
+ * (clone a VM, wait up to `--timeout-minutes` for SSH, then fail) only
+ * happens in the guarded-execution path, but a dry-run preview is exactly
+ * where an operator should learn their `--ssh-key` is misconfigured, before
+ * they ever commit to a real run — so the check is not worth special-casing
+ * away from preview.
  */
 export async function runCreate(
   ctx: CLIPluginContext,
@@ -385,6 +395,7 @@ export async function runCreate(
   try {
     spec = buildCreateVmSpec(opts);
     requireGovcEnv(process.env);
+    resolveSshKey(spec.sshKey);
   } catch (error) {
     ctx.output.error(error instanceof Error ? error.message : String(error));
     return 1;

@@ -4,7 +4,10 @@
 // first-failure-stops + --retry-bootstrap), driven entirely by fake
 // `RunFn`/client — no real ssh/vCenter/vault is ever invoked.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RunFn, RunResult } from '../src/run.js';
 import {
   requestToken,
@@ -16,6 +19,32 @@ import {
   type BootstrapTokenResponse,
   type EnrollCommandOptions,
 } from '../src/enroll.js';
+
+// `runEnroll` now runs an SSH-key existence preflight (final-review fix wave
+// item 3) unconditionally, including on the default `--ssh-key`
+// (`~/.ssh/id_ed25519`, see `enroll.ts`'s `DEFAULT_SSH_KEY`). None of the
+// `runEnroll` tests below are about that preflight (see the dedicated
+// `resolveSshKey` coverage in `test/ssh-key.test.ts` and the handler-level
+// test in the `runEnroll` describe block) — they exercise everything AFTER
+// it — so `$HOME` is pointed at a tmp dir with a real `.ssh/id_ed25519` for
+// the whole file, letting the untouched default resolve without every test
+// needing its own `--ssh-key` override.
+let sshKeyHomeDir: string;
+let originalHome: string | undefined;
+
+beforeAll(() => {
+  sshKeyHomeDir = mkdtempSync(join(tmpdir(), 'znvault-plugin-vsphere-enroll-test-'));
+  mkdirSync(join(sshKeyHomeDir, '.ssh'), { recursive: true });
+  writeFileSync(join(sshKeyHomeDir, '.ssh', 'id_ed25519'), 'fake-private-key');
+  originalHome = process.env.HOME;
+  process.env.HOME = sshKeyHomeDir;
+});
+
+afterAll(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  rmSync(sshKeyHomeDir, { recursive: true, force: true });
+});
 
 const ok = (stdout = ''): RunResult => ({ code: 0, stdout, stderr: '' });
 
@@ -389,6 +418,10 @@ describe('runEnroll', () => {
 
   it('honors explicit --ssh-user/--ssh-key overrides', async () => {
     const { ctx } = fakeCtx();
+    // Must be a real file: `runEnroll`'s SSH-key preflight (item 3) now
+    // statSyncs this path before running any step.
+    const customKey = join(sshKeyHomeDir, 'custom-key');
+    writeFileSync(customKey, 'fake-private-key');
     const seenKeys: string[] = [];
     const seenTargets: string[] = [];
     const run: RunFn = async (_cmd, args) => {
@@ -397,9 +430,34 @@ describe('runEnroll', () => {
       return ok();
     };
 
-    await runEnroll(ctx as never, { ...baseOpts, sshUser: 'ops', sshKey: '/custom/key' }, run);
+    await runEnroll(ctx as never, { ...baseOpts, sshUser: 'ops', sshKey: customKey }, run);
 
-    expect(seenKeys.every((k) => k === '/custom/key')).toBe(true);
+    expect(seenKeys.every((k) => k === customKey)).toBe(true);
     expect(seenTargets.every((t) => t === 'ops@172.16.211.30')).toBe(true);
   });
+
+  it(
+    'a missing --ssh-key exits 1 with a clear message before requesting a token or running any ssh step',
+    async () => {
+      const { ctx, error } = fakeCtx();
+      const missingKey = join(sshKeyHomeDir, 'does-not-exist-key');
+      let tokenRequested = false;
+      ctx.client.post = async <T>(): Promise<T> => {
+        tokenRequested = true;
+        return tokenResponse as unknown as T;
+      };
+      let runCalled = false;
+      const run: RunFn = async () => {
+        runCalled = true;
+        return ok();
+      };
+
+      const code = await runEnroll(ctx as never, { ...baseOpts, sshKey: missingKey }, run);
+
+      expect(code).toBe(1);
+      expect(tokenRequested).toBe(false);
+      expect(runCalled).toBe(false);
+      expect(error).toEqual([`SSH key not found: ${missingKey}`]);
+    },
+  );
 });

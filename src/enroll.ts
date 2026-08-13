@@ -14,6 +14,7 @@
 
 import type { CLIPluginContext } from './plugin-types.js';
 import { execRun, type RunFn, type RunResult } from './run.js';
+import { resolveSshKey } from './ssh-key.js';
 import type { VmSpec } from './vm-spec.js';
 import { bootstrapCommand } from './vm-spec.js';
 
@@ -213,13 +214,15 @@ function buildRetryBootstrapSpec(opts: EnrollCommandOptions, enrollOpts: EnrollO
  * the thin, untestable-in-process shim that turns a non-zero result into a
  * real `process.exit(1)`.
  *
- * Flow: optionally retry the bootstrap-vm install over SSH
- * (`--retry-bootstrap`, stops here on failure, never requests a token) ->
- * request a bootstrap token via `ctx.client` -> run `enrollScript`'s 8 steps
- * sequentially over SSH, logging only the step label (never the raw
- * command, which for step 4 contains the token) -> stop at the first
- * failing step, reporting its label and stderr -> on success, echo the
- * final verification step's stdout.
+ * Flow: resolve/validate `--ssh-key` (final-review fix wave item 3 — fails
+ * fast with a clear error before any SSH or token-request work, rather than
+ * discovering a missing key only when the first `ssh` invocation fails) ->
+ * optionally retry the bootstrap-vm install over SSH (`--retry-bootstrap`,
+ * stops here on failure, never requests a token) -> request a bootstrap
+ * token via `ctx.client` -> run `enrollScript`'s 8 steps sequentially over
+ * SSH, logging only the step label (never the raw command, which for step 4
+ * contains the token) -> stop at the first failing step, reporting its label
+ * and stderr -> on success, echo the final verification step's stdout.
  */
 export async function runEnroll(
   ctx: CLIPluginContext,
@@ -227,6 +230,13 @@ export async function runEnroll(
   run: RunFn = execRun,
 ): Promise<number> {
   const enrollOpts = buildEnrollOpts(opts);
+
+  try {
+    resolveSshKey(enrollOpts.sshKey);
+  } catch (error) {
+    ctx.output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 
   if (opts.retryBootstrap) {
     ctx.output.info('Retrying bootstrap before enrollment...');

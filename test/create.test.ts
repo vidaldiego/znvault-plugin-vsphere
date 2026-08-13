@@ -4,13 +4,42 @@
 // driven entirely by fake `RunFn`/`sleep` — no real govc/ssh/vCenter is
 // ever invoked.
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RunFn, RunResult } from '../src/run.js';
 import type { VmSpec } from '../src/vm-spec.js';
 import { paths } from '../src/vm-spec.js';
 import { createPhases, makeCreateDryRun } from '../src/create.js';
 import { runCreate, type CreateOptions } from '../src/commands.js';
 import type { runEnroll } from '../src/enroll.js';
+
+// `runCreate` now runs an SSH-key existence preflight (final-review fix wave
+// item 3) unconditionally, including on the default `--ssh-key`
+// (`~/.ssh/id_ed25519`, see `commands.ts`'s `buildCreateVmSpec`). None of the
+// `runCreate` tests below are about that preflight (see the dedicated
+// `resolveSshKey` coverage in `test/ssh-key.test.ts` and the handler-level
+// test near the bottom of this file) — they exercise everything AFTER it —
+// so `$HOME` is pointed at a tmp dir with a real `.ssh/id_ed25519` for the
+// whole file, letting the untouched default resolve without every test
+// needing its own `--ssh-key` override.
+let sshKeyHomeDir: string;
+let originalHome: string | undefined;
+
+beforeAll(() => {
+  sshKeyHomeDir = mkdtempSync(join(tmpdir(), 'znvault-plugin-vsphere-create-test-'));
+  mkdirSync(join(sshKeyHomeDir, '.ssh'), { recursive: true });
+  writeFileSync(join(sshKeyHomeDir, '.ssh', 'id_ed25519'), 'fake-private-key');
+  originalHome = process.env.HOME;
+  process.env.HOME = sshKeyHomeDir;
+});
+
+afterAll(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  rmSync(sshKeyHomeDir, { recursive: true, force: true });
+});
 
 const baseSpec: VmSpec = {
   name: 'trust-api-1',
@@ -366,6 +395,31 @@ describe('runCreate — --confirm guard', () => {
 
     expect(runCalled).toBe(true);
   });
+});
+
+describe('runCreate — SSH-key preflight', () => {
+  afterEachRestoreGovcUrl();
+
+  it(
+    'a missing --ssh-key exits 1 with a clear message and never calls run at all ' +
+      '(not even a read-only govc call — the check runs before plan)',
+    async () => {
+      process.env.GOVC_URL = 'https://vcenter.test';
+      const { ctx, error } = fakeCtx();
+      const missingKey = join(sshKeyHomeDir, 'does-not-exist-key');
+      let runCalled = false;
+      const run: RunFn = async () => {
+        runCalled = true;
+        return ok();
+      };
+
+      const code = await runCreate(ctx, { ...opts, confirm: opts.name, sshKey: missingKey }, run, noopSleepMs);
+
+      expect(code).toBe(1);
+      expect(runCalled).toBe(false);
+      expect(error).toEqual([`SSH key not found: ${missingKey}`]);
+    },
+  );
 });
 
 describe('runCreate — no --confirm (dry-run by default)', () => {
