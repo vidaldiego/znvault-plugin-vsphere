@@ -3,15 +3,17 @@
 // after `plan`'s read-only preflight passes — ports
 // `bootstrap-vm/new-bootstrapped-vm.sh` lines 395-461: clone (395-415),
 // resize (418-433), grow-disk (437-449, re-reading the CLONE's own disk
-// info — not the template's), network (452-456), power-on (459-461).
-// Waiting for IP/SSH and running the bootstrap command are orchestrated by
-// the `create` handler in `commands.ts` (see `wait.ts`), not here — this
-// module only builds the govc mutation phases.
+// info — not the template's — and only resizing when the requested size is
+// strictly greater than the clone's current size, matching the script's
+// `(( DISK_GB > TEMPLATE_DISK_GB ))` guard at line 437), network (452-456),
+// power-on (459-461). Waiting for IP/SSH and running the bootstrap command
+// are orchestrated by the `create` handler in `commands.ts` (see
+// `wait.ts`), not here — this module only builds the govc mutation phases.
 
 import { makeDryRun, type RunFn } from './run.js';
 import type { VmSpec } from './vm-spec.js';
 import { cloneArgs, paths } from './vm-spec.js';
-import { parseDiskDevicesJson } from './validate.js';
+import { BYTES_PER_GB, parseDiskDevicesJson } from './validate.js';
 
 /**
  * vCenter's inventory can lag briefly right after `vm.clone` returns —
@@ -45,7 +47,7 @@ export function createPhases(
   s: VmSpec,
   templatePath: string,
   targetHostPath: string | undefined,
-  deps: { sleep: (ms: number) => Promise<void> },
+  deps: { sleep: (ms: number) => Promise<void>; log?: (line: string) => void },
 ): CreatePhase[] {
   const p = paths(s);
   const phases: CreatePhase[] = [];
@@ -74,6 +76,7 @@ export function createPhases(
   }
 
   if (s.diskGb !== undefined) {
+    const requestedGb = s.diskGb;
     phases.push({
       label: 'grow-disk',
       exec: async (run) => {
@@ -90,9 +93,29 @@ export function createPhases(
           throw new Error(`Cloned VM has ${devices.length} disks; refusing an ambiguous resize`);
         }
 
-        const diskKey = devices[0]?.key;
+        const disk = devices[0];
+        if (disk === undefined) {
+          throw new Error(`Cloned VM's disk info is empty: ${p.vm}`);
+        }
+
+        const diskKey = disk.key;
         if (diskKey === undefined) {
           throw new Error(`Cloned VM's disk is missing a device key: ${p.vm}`);
+        }
+
+        // Mirrors the script's `(( DISK_GB > TEMPLATE_DISK_GB ))` guard
+        // (line 437) — re-read against the CLONE's own current size (not
+        // the template's, which `plan`'s precheck already validated): only
+        // grow when the requested size is strictly greater than what the
+        // clone already has. `plan`'s precheck allows `--disk-gb` equal to
+        // the template's size, so this is the authoritative gate against an
+        // untested, unnecessary same/smaller-size `vm.disk.change` call.
+        const currentGb = Math.floor((disk.capacityInBytes ?? 0) / BYTES_PER_GB);
+        if (requestedGb <= currentGb) {
+          deps.log?.(
+            `Disk already ${currentGb}GB (requested ${requestedGb}GB) — skipping resize`,
+          );
+          return;
         }
 
         const result = await run('govc', [
@@ -102,7 +125,7 @@ export function createPhases(
           '-disk.key',
           String(diskKey),
           '-size',
-          `${s.diskGb}G`,
+          `${requestedGb}G`,
         ]);
         if (result.code !== 0) throwOnFailure('govc vm.disk.change', result.code, result.stderr, result.stdout);
       },

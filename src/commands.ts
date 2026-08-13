@@ -379,7 +379,10 @@ export async function runCreate(
     return 1;
   }
 
-  const phases = createPhases(spec, templatePath, targetHostPath, { sleep });
+  const phases = createPhases(spec, templatePath, targetHostPath, {
+    sleep,
+    log: (line) => ctx.output.info(line),
+  });
 
   if (opts.confirm === undefined) {
     return previewCreate(ctx, spec, phases);

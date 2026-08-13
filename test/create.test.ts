@@ -94,19 +94,25 @@ describe('createPhases', () => {
   });
 
   describe('grow-disk phase', () => {
-    function growDiskPhase(spec: VmSpec) {
-      return createPhases(spec, templatePath, undefined, { sleep: noopSleep }).find(
+    const ONE_GB = 1_073_741_824;
+
+    function growDiskPhase(spec: VmSpec, log?: (line: string) => void) {
+      return createPhases(spec, templatePath, undefined, { sleep: noopSleep, log }).find(
         (ph) => ph.label === 'grow-disk',
       )!;
     }
 
-    it('re-reads the CLONE (not the template) device.info and resizes its single disk', async () => {
+    it('re-reads the CLONE (not the template) device.info and resizes its single disk when growing', async () => {
       const spec: VmSpec = { ...baseSpec, diskGb: 100 };
       const seen: string[][] = [];
       const run: RunFn = async (cmd, args) => {
         seen.push([cmd, ...args]);
         if (args[0] === 'device.info') {
-          return { code: 0, stdout: JSON.stringify({ devices: [{ key: 2001 }] }), stderr: '' };
+          return {
+            code: 0,
+            stdout: JSON.stringify({ devices: [{ key: 2001, capacityInBytes: 50 * ONE_GB }] }),
+            stderr: '',
+          };
         }
         return { code: 0, stdout: '', stderr: '' };
       };
@@ -116,6 +122,53 @@ describe('createPhases', () => {
       expect(seen[0]).toEqual(['govc', 'device.info', '-json', '-vm', p.vm, 'disk-*']);
       expect(seen[1]).toEqual(['govc', 'vm.disk.change', '-vm', p.vm, '-disk.key', '2001', '-size', '100G']);
     });
+
+    it('skips vm.disk.change when the requested size equals the clone\'s current size, and logs why', async () => {
+      const spec: VmSpec = { ...baseSpec, diskGb: 50 };
+      const seen: string[][] = [];
+      const logLines: string[] = [];
+      const run: RunFn = async (cmd, args) => {
+        seen.push([cmd, ...args]);
+        if (args[0] === 'device.info') {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ devices: [{ key: 2001, capacityInBytes: 50 * ONE_GB }] }),
+            stderr: '',
+          };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      };
+
+      await growDiskPhase(spec, (line) => logLines.push(line)).exec(run);
+
+      expect(seen.some((call) => call[1] === 'vm.disk.change')).toBe(false);
+      expect(logLines.some((l) => l.includes('50GB') && /skip/i.test(l))).toBe(true);
+    });
+
+    it(
+      "skips vm.disk.change when the requested size is smaller than the clone's current size " +
+        '(strict-greater semantics, script line 437 — plan\'s precheck only guards the template, ' +
+        'this re-read is the authoritative gate against the clone)',
+      async () => {
+        const spec: VmSpec = { ...baseSpec, diskGb: 40 };
+        const seen: string[][] = [];
+        const run: RunFn = async (cmd, args) => {
+          seen.push([cmd, ...args]);
+          if (args[0] === 'device.info') {
+            return {
+              code: 0,
+              stdout: JSON.stringify({ devices: [{ key: 2001, capacityInBytes: 50 * ONE_GB }] }),
+              stderr: '',
+            };
+          }
+          return { code: 0, stdout: '', stderr: '' };
+        };
+
+        await growDiskPhase(spec).exec(run);
+
+        expect(seen.some((call) => call[1] === 'vm.disk.change')).toBe(false);
+      },
+    );
 
     it('refuses an ambiguous resize when the clone has more than one disk', async () => {
       const spec: VmSpec = { ...baseSpec, diskGb: 100 };

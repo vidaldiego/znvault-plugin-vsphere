@@ -43,7 +43,8 @@ export interface ValidationStep {
   diskGb?: number;
 }
 
-const BYTES_PER_GB = 1_073_741_824;
+/** Shared by this module's disk precheck and `create.ts`'s grow-disk phase. */
+export const BYTES_PER_GB = 1_073_741_824;
 
 /**
  * Builds the read-only validation steps for a spec — ports script lines
