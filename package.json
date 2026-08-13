@@ -1,0 +1,71 @@
+{
+  "name": "@zincapp/znvault-plugin-vsphere",
+  "version": "0.1.0",
+  "description": "vSphere VM provisioning plugin for znvault CLI (govc clone + bootstrap + zn-vault-agent enrollment)",
+  "type": "module",
+  "main": "dist/cli.js",
+  "types": "dist/cli.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:prod": "tsc --sourceMap false",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint 'src/**/*.ts' 'test/**/*.ts'",
+    "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint 'src/**/*.ts' 'test/**/*.ts' --fix",
+    "prepublishOnly": "npm run build:prod"
+  },
+  "keywords": [
+    "znvault",
+    "vsphere",
+    "govc",
+    "vm-provisioning"
+  ],
+  "author": "ZincApp",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vidaldiego/znvault-plugin-vsphere.git"
+  },
+  "homepage": "https://github.com/vidaldiego/znvault-plugin-vsphere#readme",
+  "bugs": {
+    "url": "https://github.com/vidaldiego/znvault-plugin-vsphere/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@zincapp/znvault-cli": ">=2.11.0"
+  },
+  "peerDependenciesMeta": {
+    "@zincapp/znvault-cli": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@typescript-eslint/eslint-plugin": "^8.63.0",
+    "@typescript-eslint/parser": "^8.63.0",
+    "commander": "^14.0.2",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
