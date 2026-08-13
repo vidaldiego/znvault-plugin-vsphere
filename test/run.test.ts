@@ -1,0 +1,99 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { execRun, makeDryRun, requireGovcEnv } from '../src/run.js';
+
+describe('makeDryRun', () => {
+  it('collects a `[dry-run] cmd args…` line per call and resolves with code 0', async () => {
+    const lines: string[] = [];
+    const run = makeDryRun((line) => lines.push(line));
+
+    const result = await run('govc', ['vm.clone', '-vm', '/ZincApp/vm/tpl', 'trust-api-1']);
+
+    expect(result).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(lines).toEqual(['[dry-run] govc vm.clone -vm /ZincApp/vm/tpl trust-api-1']);
+  });
+
+  it('never touches the filesystem/network — one logged line per invocation, in order', async () => {
+    const lines: string[] = [];
+    const run = makeDryRun((line) => lines.push(line));
+
+    await run('govc', ['vm.power', '-on', '/ZincApp/vm/trust-api-1']);
+    await run('ssh', ['sysadmin@10.0.0.5', 'echo ok']);
+
+    expect(lines).toEqual([
+      '[dry-run] govc vm.power -on /ZincApp/vm/trust-api-1',
+      '[dry-run] ssh sysadmin@10.0.0.5 echo ok',
+    ]);
+  });
+});
+
+describe('requireGovcEnv', () => {
+  it('throws naming all four GOVC_* vars when none are set', () => {
+    expect(() => requireGovcEnv({})).toThrow(
+      /GOVC_URL.*GOVC_USERNAME.*GOVC_PASSWORD.*GOVC_INSECURE/s,
+    );
+  });
+
+  it('throws when GOVC_URL specifically is missing', () => {
+    expect(() =>
+      requireGovcEnv({ GOVC_USERNAME: 'administrator@vsphere.local', GOVC_PASSWORD: 'secret' }),
+    ).toThrow(/GOVC_URL/);
+  });
+
+  it('does not throw when GOVC_URL, GOVC_USERNAME and GOVC_PASSWORD are set', () => {
+    expect(() =>
+      requireGovcEnv({
+        GOVC_URL: 'vcenter.example.com',
+        GOVC_USERNAME: 'administrator@vsphere.local',
+        GOVC_PASSWORD: 'secret',
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('execRun', () => {
+  const originalGovcUrl = process.env.GOVC_URL;
+
+  afterEach(() => {
+    if (originalGovcUrl === undefined) delete process.env.GOVC_URL;
+    else process.env.GOVC_URL = originalGovcUrl;
+  });
+
+  it('resolves with stdout and code 0 on success', async () => {
+    const result = await execRun(process.execPath, ['-e', "process.stdout.write('hello')"]);
+    expect(result).toEqual({ code: 0, stdout: 'hello', stderr: '' });
+  });
+
+  it('resolves (does not reject) with the non-zero exit code and stderr on failure', async () => {
+    const result = await execRun(process.execPath, [
+      '-e',
+      "process.stderr.write('boom'); process.exit(3)",
+    ]);
+    expect(result.code).toBe(3);
+    expect(result.stderr).toContain('boom');
+  });
+
+  it('resolves with code -1 and the error message in stderr on spawn failure', async () => {
+    const result = await execRun('this-binary-does-not-exist-anywhere', []);
+    expect(result.code).toBe(-1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+
+  it('inherits process.env so GOVC_* vars reach the child process', async () => {
+    process.env.GOVC_URL = 'https://vcenter.inherited.test';
+    const result = await execRun(process.execPath, [
+      '-e',
+      'process.stdout.write(process.env.GOVC_URL || "")',
+    ]);
+    expect(result.stdout).toBe('https://vcenter.inherited.test');
+  });
+
+  it('never invokes a shell — shell metacharacters in an arg are passed through literally', async () => {
+    const result = await execRun(process.execPath, [
+      '-e',
+      'process.stdout.write(process.argv[1])',
+      '$(echo pwned); rm -rf /',
+    ]);
+    expect(result.stdout).toBe('$(echo pwned); rm -rf /');
+  });
+});
