@@ -1,7 +1,7 @@
 {
   "name": "@zincapp/znvault-plugin-vsphere",
-  "version": "0.1.0",
-  "description": "vSphere VM provisioning plugin for znvault CLI (govc clone + bootstrap + zn-vault-agent enrollment)",
+  "version": "0.2.0",
+  "description": "vSphere provisioning and fixed LAB source fencing for the znvault CLI",
   "type": "module",
   "main": "dist/cli.js",
   "types": "dist/cli.d.ts",

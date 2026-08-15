@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { execRun, makeDryRun, requireGovcEnv } from '../src/run.js';
+import { execRun, makeDryRun } from '../src/run.js';
 
 describe('makeDryRun', () => {
   it('collects a `[dry-run] cmd args…` line per call and resolves with code 0', async () => {
@@ -26,36 +26,12 @@ describe('makeDryRun', () => {
   });
 });
 
-describe('requireGovcEnv', () => {
-  it('throws naming all four GOVC_* vars when none are set', () => {
-    expect(() => requireGovcEnv({})).toThrow(
-      /GOVC_URL.*GOVC_USERNAME.*GOVC_PASSWORD.*GOVC_INSECURE/s,
-    );
-  });
-
-  it('throws when GOVC_URL specifically is missing', () => {
-    expect(() =>
-      requireGovcEnv({ GOVC_USERNAME: 'administrator@vsphere.local', GOVC_PASSWORD: 'secret' }),
-    ).toThrow(/GOVC_URL/);
-  });
-
-  it('does not throw when GOVC_URL, GOVC_USERNAME and GOVC_PASSWORD are set', () => {
-    expect(() =>
-      requireGovcEnv({
-        GOVC_URL: 'vcenter.example.com',
-        GOVC_USERNAME: 'administrator@vsphere.local',
-        GOVC_PASSWORD: 'secret',
-      }),
-    ).not.toThrow();
-  });
-});
-
 describe('execRun', () => {
-  const originalGovcUrl = process.env.GOVC_URL;
+  const originalTestValue = process.env.ZNVAULT_RUN_TEST_VALUE;
 
   afterEach(() => {
-    if (originalGovcUrl === undefined) delete process.env.GOVC_URL;
-    else process.env.GOVC_URL = originalGovcUrl;
+    if (originalTestValue === undefined) delete process.env.ZNVAULT_RUN_TEST_VALUE;
+    else process.env.ZNVAULT_RUN_TEST_VALUE = originalTestValue;
   });
 
   it('resolves with stdout and code 0 on success', async () => {
@@ -79,13 +55,13 @@ describe('execRun', () => {
     expect(result.stderr.length).toBeGreaterThan(0);
   });
 
-  it('inherits process.env so GOVC_* vars reach the child process', async () => {
-    process.env.GOVC_URL = 'https://vcenter.inherited.test';
+  it('inherits process.env for ordinary child-process configuration', async () => {
+    process.env.ZNVAULT_RUN_TEST_VALUE = 'inherited';
     const result = await execRun(process.execPath, [
       '-e',
-      'process.stdout.write(process.env.GOVC_URL || "")',
+      'process.stdout.write(process.env.ZNVAULT_RUN_TEST_VALUE || "")',
     ]);
-    expect(result.stdout).toBe('https://vcenter.inherited.test');
+    expect(result.stdout).toBe('inherited');
   });
 
   it('never invokes a shell — shell metacharacters in an arg are passed through literally', async () => {

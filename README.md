@@ -1,10 +1,8 @@
 # @zincapp/znvault-plugin-vsphere
 
-vSphere VM provisioning plugin for the `znvault` CLI. It drives `govc` to
-clone VMs from a template, bootstrap them, and enroll the resulting host
-with `zn-vault-agent` — the same way `znvault-plugin-webdeploy` and
-`znvault-plugin-archon` extend `znvault` with deployer-specific command
-groups.
+vSphere plugin for the `znvault` CLI. It drives `govc` to provision VMs and
+exposes the fixed Emergency DR LAB source-fence verbs. vCenter credentials
+are read from ZnVault through the CLI's authenticated client.
 
 It is a **CLI-only plugin** (no agent-side component — an agent plugin
 can't create the VM it isn't running on yet), registered with `znvault`
@@ -30,22 +28,20 @@ shells out to `ssh` for bootstrap/enrollment/status probes, so an SSH key
 that the target template trusts (see [SSH access](#ssh-access) below) must
 be available locally.
 
-## vCenter connection (`GOVC_*`)
+## vCenter credential
 
-Every subcommand that touches vCenter requires the standard govc connection
-variables to be exported first:
+Every subcommand that touches vCenter resolves a `credential` secret from
+the current authenticated ZnVault profile. The default alias is:
 
-```bash
-export GOVC_URL=https://vcenter.zincapp.internal
-export GOVC_USERNAME=administrator@vsphere.local
-export GOVC_PASSWORD='...'
-export GOVC_INSECURE=1   # self-signed vCenter cert
+```text
+infra/vsphere/leganes/vcenter
 ```
 
-`GOVC_URL` is checked eagerly by every command — a missing value fails fast
-with a message naming all four variables, before any govc call is made. See
-[Credentials](#credentials) below for the current state of how these values
-are sourced (env-only today, by design).
+Its decrypted data must be `{ "url", "username", "password", "insecure" }`.
+The plugin injects the corresponding `GOVC_*` values only into each `govc`
+child process; it does not mutate `process.env`, pass them to `ssh`, or fall
+back to shell variables. `plan`, `create`, and `status` accept
+`--credential-alias`; the DR fence deliberately does not.
 
 ## SSH access
 
@@ -141,7 +137,7 @@ than enrolling a host whose network/CA trust never got configured.
   full read-only `plan` preflight still runs for real against vCenter (so a
   dry run also validates your inputs).
 - Pass `--confirm <value>` where `<value>` does not exactly equal `--name`
-  → hard error, before `GOVC_URL` is even checked. A typo'd `--confirm`
+  → hard error, before the Vault credential is read. A typo'd `--confirm`
   must never touch vCenter, not even a read-only call.
 - Pass `--confirm <name>` matching `--name` exactly → executes for real.
 
@@ -237,24 +233,49 @@ health endpoint. **`status` reports, it doesn't gate**: a degraded result
 exits non-zero. Accepts `--ssh-user`/`--ssh-key` overrides for the
 reachability/agent probes, same defaults as `create`/`enroll`.
 
-## Credentials
+### `fence-status` — fixed LAB source observation
 
-**Today: `GOVC_*` environment variables only (accepted, documented
-trade-off — see decision D4 in the deployment design doc referenced
-above).** The vCenter credential currently lives in plaintext in an
-operator's shell environment / `.env` file rather than in vault itself —
-the same status quo as the `infra-vsphere/.env` credential this plugin's
-`govc` calls already depended on. This is a deliberate, temporarily
-accepted risk (tracked in the ZincApp risk register once loaded), not an
-oversight.
+```bash
+znvault vsphere fence-status
+```
 
-**Future evolution:** resolving the vCenter credential from a vault alias
-(e.g. `infra/vsphere/vcenter`) first, falling back to `GOVC_*` env vars,
-is a planned enhancement — and by design a **configuration-only** change
-when it lands: `run.ts`'s `requireGovcEnv`/`execRun` already funnel every
-govc invocation through `process.env`, so swapping the credential source
-means populating those same env vars from a resolved vault secret before
-the first govc call, not touching any command's logic.
+Read-only. Resolves the fixed Vault alias and requires the endpoint to be
+exactly `https://vcenter.zincapp.com` (currently `172.16.51.51`), then checks
+the MoRef, name, BIOS UUID, instance UUID and power state of the four fixed
+Leganés LAB source VMs. It
+returns `FENCED / NONE / GO` only when all four are powered off; otherwise
+it returns `UNFENCED / NONE / NO_GO` with exit `78`.
+
+### `fence-source` — fixed LAB source fence
+
+```bash
+# Inert preview; does not read Vault or call govc:
+znvault vsphere fence-source
+```
+
+The command has no target flags and no power-on path. Without confirmation
+it prints the four immutable targets and returns `INERT_REFUSAL / NONE / NO_GO`
+with exit `78`. Execution requires the exact token
+`FENCE-SOURCE-LEG-LAB`; it then validates all four identities, issues one
+fixed `govc vm.power -off -force=true -wait=true ...` command, and verifies
+all four power states afterwards. Merely installing or publishing the
+plugin executes nothing.
+
+The fixed inventory is:
+
+- `vm-7020` — `vault-leg-lab-1`
+- `vm-7021` — `vault-pg-leg-lab-1`
+- `vm-7024` — `vault-pg-leg-lab-2`
+- `vm-7025` — `vault-pg-leg-lab-3`
+
+## Credential handling
+
+The plugin uses the normal tenant-scoped secret contract: `GET
+/v1/secrets/alias/:alias` followed by `POST
+/v1/secrets/:id/decrypt?resolve=false`. Tenant identity comes from the
+current CLI authentication context; no tenant is accepted from a command
+argument. The active identity therefore needs metadata-read and
+value-decrypt access to the chosen secret.
 
 ## Development
 
@@ -267,7 +288,8 @@ npm run lint             # eslint
 npm run build:prod      # clean production build (what `prepublishOnly` runs)
 ```
 
-Every command handler (`runPlan`/`runCreate`/`runEnroll`/`runStatus`) is a
+Every command handler (`runPlan`/`runCreate`/`runEnroll`/`runStatus` and
+the two fence handlers) is a
 plain async function that takes an injectable `RunFn` and returns a process
 exit code — the `.action()` registered with commander is a one-line shim
 that calls it and only then touches `process.exit`. That's what lets the
@@ -293,13 +315,13 @@ job would fail at the `npm publish` step.
 # Bump the version (edits package.json, no git action):
 npm version patch --no-git-tag-version   # or minor/major
 git add package.json package-lock.json
-git commit -m "chore(release): v0.1.0"
+git commit -m "chore(release): v0.2.0"
 
 # Tag and push — this is what actually triggers publish.yml:
-git tag v0.1.0
+git tag v0.2.0
 git push origin main
-git push origin v0.1.0
-# → publish.yml builds, tests, and publishes @zincapp/znvault-plugin-vsphere@0.1.0
+git push origin v0.2.0
+# → publish.yml builds, tests, and publishes @zincapp/znvault-plugin-vsphere@0.2.0
 ```
 
 ## License

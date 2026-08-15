@@ -25,12 +25,10 @@ export type RunFn = (
 
 /**
  * Runs `cmd` via `execFile` — never a shell, so args containing shell
- * metacharacters are passed through literally. Inherits `process.env` (so
- * `GOVC_URL`/`GOVC_USERNAME`/`GOVC_PASSWORD`/`GOVC_INSECURE` reach `govc`
- * without the caller re-threading them), merging in any `opts.env`
- * overrides. Never rejects: a non-zero exit code or a spawn error (e.g. the
- * binary is not on PATH) is captured into the resolved `RunResult` — a spawn
- * error resolves with `code: -1` and the error message in `stderr`.
+ * metacharacters are passed through literally. Inherits `process.env` and
+ * merges in any `opts.env` overrides. The vSphere command layer injects its
+ * Vault-resolved `GOVC_*` values only for `govc` children. Never rejects: a
+ * non-zero exit code or a spawn error is captured into the result.
  */
 /**
  * `execFile`'s own default `maxBuffer` is 1 MiB — too small for a real
@@ -75,20 +73,4 @@ export function makeDryRun(log: (line: string) => void): RunFn {
     log(`[dry-run] ${[cmd, ...args].join(' ')}`);
     return { code: 0, stdout: '', stderr: '' };
   };
-}
-
-const REQUIRED_GOVC_VARS = ['GOVC_URL', 'GOVC_USERNAME', 'GOVC_PASSWORD', 'GOVC_INSECURE'] as const;
-
-/**
- * Mirrors the proven script's usage check: refuses to proceed unless
- * `GOVC_URL` is set, and names all four `GOVC_*` connection vars in the
- * error message (matching `new-bootstrapped-vm.sh`'s usage text) so the
- * caller knows the full set to export, not just the one that's missing.
- */
-export function requireGovcEnv(env: NodeJS.ProcessEnv): void {
-  if (!env.GOVC_URL) {
-    throw new Error(
-      `GOVC_URL not set. Export vCenter connection variables: ${REQUIRED_GOVC_VARS.join(', ')}`,
-    );
-  }
 }

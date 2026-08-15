@@ -4,7 +4,7 @@
 // + ssh probes), driven entirely by a fake `RunFn` — no real govc/ssh/
 // vCenter is ever invoked.
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { RunFn, RunResult } from '../src/run.js';
 import { summarizeStatus, runStatus, type StatusInputs, type StatusOptions } from '../src/status.js';
 
@@ -74,7 +74,24 @@ function fakeCtx() {
   const error: string[] = [];
   return {
     ctx: {
-      client: { get: async () => ({}) as never, post: async () => ({}) as never },
+      client: {
+        get: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+        }) as never,
+        post: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+          data: {
+            url: 'https://vcenter.test',
+            username: 'test-user',
+            password: 'test-password',
+            insecure: true,
+          },
+        }) as never,
+      },
       output: {
         success: () => {},
         error: (m: string) => error.push(m),
@@ -93,28 +110,20 @@ const vmInfoJson = (powerState: string): string =>
   JSON.stringify({ virtualMachines: [{ summary: { runtime: { powerState } } }] });
 
 describe('runStatus', () => {
-  const originalGovcUrl = process.env.GOVC_URL;
-
-  afterEach(() => {
-    if (originalGovcUrl === undefined) delete process.env.GOVC_URL;
-    else process.env.GOVC_URL = originalGovcUrl;
-  });
-
-  it('reports the missing GOVC_URL error and exits 1 without invoking govc', async () => {
-    delete process.env.GOVC_URL;
+  it('reports an invalid Vault credential and exits 1 without invoking govc', async () => {
     const { ctx, error } = fakeCtx();
+    ctx.client.get = async () => ({}) as never;
     const run: RunFn = async () => {
-      throw new Error('run should not be called when GOVC_URL is missing');
+      throw new Error('run should not be called when the Vault credential is invalid');
     };
 
     const code = await runStatus(ctx, opts, run);
 
     expect(code).toBe(1);
-    expect(error[0]).toMatch(/GOVC_URL/);
+    expect(error[0]).toMatch(/not the expected credential/);
   });
 
   it('VM not found (empty virtualMachines array from govc): exits 1 with a clear message, no ip/ssh calls', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run: RunFn = async (_cmd, args) => {
       if (args[0] === 'vm.info') return ok(JSON.stringify({ virtualMachines: [] }));
@@ -128,7 +137,6 @@ describe('runStatus', () => {
   });
 
   it('govc vm.info itself fails (connection issue): exits 1 with the query-failure message, not "VM not found"', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run: RunFn = async (_cmd, args) => {
       if (args[0] === 'vm.info') return fail('connection refused');
@@ -143,7 +151,6 @@ describe('runStatus', () => {
   });
 
   it('created-no-ip: powered on, govc vm.ip comes up empty — returns 0 (status reports, it does not gate) and never attempts ssh', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info, error } = fakeCtx();
     const run: RunFn = async (cmd, args) => {
       if (args[0] === 'vm.info') return ok(vmInfoJson('poweredOn'));
@@ -161,7 +168,6 @@ describe('runStatus', () => {
   });
 
   it('all-green: power on, IP resolved, ssh echo ok, agent curl succeeds — exits 0 with a full summary', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info } = fakeCtx();
     const seen: string[][] = [];
     const run: RunFn = async (cmd, args) => {
@@ -184,7 +190,6 @@ describe('runStatus', () => {
   });
 
   it('ip-no-ssh: IP resolved but the ssh probe fails — exits 0 (degraded, not an error) and never attempts the agent curl', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info, error } = fakeCtx();
     const run: RunFn = async (cmd, args) => {
       if (args[0] === 'vm.info') return ok(vmInfoJson('poweredOn'));

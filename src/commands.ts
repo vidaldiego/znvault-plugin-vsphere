@@ -6,11 +6,11 @@
 // `enroll.ts`) installs/configures/verifies zn-vault-agent over SSH and can
 // be chained automatically from `create --fleet <hostConfig>`. `status`
 // (Task 6, in `status.ts`) reports power/IP/SSH/agent state for an
-// already-provisioned VM. All four subcommands are now implemented.
+// already-provisioned VM. `fence.ts` adds the two fixed LAB fence verbs.
 
 import type { Command } from 'commander';
 import type { CLIPluginContext } from './plugin-types.js';
-import { execRun, requireGovcEnv, type RunFn } from './run.js';
+import { execRun, type RunFn } from './run.js';
 import { resolveSshKey } from './ssh-key.js';
 import type { VmSpec } from './vm-spec.js';
 import { bootstrapCommand, paths } from './vm-spec.js';
@@ -19,6 +19,8 @@ import { createPhases, makeCreateDryRun, type CreatePhase } from './create.js';
 import { waitForIp, waitForSsh } from './wait.js';
 import { runEnroll, type EnrollCommandOptions } from './enroll.js';
 import { runStatus, type StatusOptions } from './status.js';
+import { resolveVcenterRun } from './vault-credentials.js';
+import { registerFenceCommands } from './fence.js';
 
 /** Raw `--flag <value>` strings as commander hands them to the `plan` action. */
 export interface PlanOptions {
@@ -33,6 +35,7 @@ export interface PlanOptions {
   numCpu?: string;
   memoryGb?: string;
   diskGb?: string;
+  credentialAlias?: string;
 }
 
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
@@ -84,32 +87,24 @@ function buildVmSpec(opts: PlanOptions): VmSpec {
  * `plan` command's `.action()` below is the one-line, untestable-in-process
  * shim that turns a non-zero result into an actual `process.exit(1)`.
  *
- * Flow (ports script lines 163-368): validate numeric options ->
- * `requireGovcEnv` -> `govc about` (connection check) -> `resolveTemplate`
+ * Flow (ports script lines 163-368): validate numeric options -> resolve the
+ * vCenter credential from ZnVault -> `govc about` -> `resolveTemplate`
  * -> `resolveTargetHost` (only issues govc calls when `--host` was given) ->
  * `validationSteps` -> `runValidations` per step, printing each step's
  * label with a checkmark/cross as it resolves -> summary.
  */
-export async function runPlan(
+async function runPlanWithVcenter(
   ctx: CLIPluginContext,
-  opts: PlanOptions,
-  run: RunFn = execRun,
+  spec: VmSpec,
+  run: RunFn,
+  endpoint: string,
 ): Promise<number> {
-  let spec: VmSpec;
-  try {
-    spec = buildVmSpec(opts);
-    requireGovcEnv(process.env);
-  } catch (error) {
-    ctx.output.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
-
   const about = await run('govc', ['about']);
   if (about.code !== 0) {
-    ctx.output.error(`Cannot connect to vCenter at ${process.env.GOVC_URL}`);
+    ctx.output.error(`Cannot connect to vCenter at ${endpoint}`);
     return 1;
   }
-  ctx.output.info(`Connected to ${process.env.GOVC_URL}`);
+  ctx.output.info(`Connected to ${endpoint}`);
 
   let templatePath: string;
   try {
@@ -147,6 +142,21 @@ export async function runPlan(
 
   ctx.output.success(`Plan validation passed (${steps.length} check(s)). Ready to create '${spec.name}'.`);
   return 0;
+}
+
+export async function runPlan(
+  ctx: CLIPluginContext,
+  opts: PlanOptions,
+  run: RunFn = execRun,
+): Promise<number> {
+  try {
+    const spec = buildVmSpec(opts);
+    const vcenter = await resolveVcenterRun(ctx, run, opts.credentialAlias);
+    return await runPlanWithVcenter(ctx, spec, vcenter.run, vcenter.endpoint);
+  } catch (error) {
+    ctx.output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 /**
@@ -365,12 +375,12 @@ async function executeCreate(
  * default** — `create` still runs the full read-only `plan` preflight
  * against real vCenter, then only *previews* the mutation phases. Passing
  * `--confirm <value>` that does not equal `--name` exactly is an error,
- * checked first, before `requireGovcEnv` or any other work — a typo'd
- * `--confirm` must never touch vCenter, not even a read-only call.
+ * checked first, before resolving the Vault credential or any other work —
+ * a typo'd `--confirm` must never touch vCenter, not even a read-only call.
  *
  * SSH-key preflight placement (spec decision, final-review fix wave item 3):
- * `resolveSshKey` runs unconditionally at options-parse time, alongside
- * `requireGovcEnv` — not gated on `--confirm`. The costliest failure mode
+ * `resolveSshKey` runs unconditionally at options-parse time, before Vault
+ * credential resolution — not gated on `--confirm`. The costliest failure mode
  * (clone a VM, wait up to `--timeout-minutes` for SSH, then fail) only
  * happens in the guarded-execution path, but a dry-run preview is exactly
  * where an operator should learn their `--ssh-key` is misconfigured, before
@@ -394,21 +404,28 @@ export async function runCreate(
   let spec: VmSpec;
   try {
     spec = buildCreateVmSpec(opts);
-    requireGovcEnv(process.env);
     resolveSshKey(spec.sshKey);
   } catch (error) {
     ctx.output.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
 
-  const planCode = await runPlan(ctx, opts, run);
+  let vcenter: Awaited<ReturnType<typeof resolveVcenterRun>>;
+  try {
+    vcenter = await resolveVcenterRun(ctx, run, opts.credentialAlias);
+  } catch (error) {
+    ctx.output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  const planCode = await runPlanWithVcenter(ctx, spec, vcenter.run, vcenter.endpoint);
   if (planCode !== 0) return planCode;
 
   let templatePath: string;
   let targetHostPath: string | undefined;
   try {
-    templatePath = await resolveTemplate(run, spec);
-    targetHostPath = await resolveTargetHost(run, spec);
+    templatePath = await resolveTemplate(vcenter.run, spec);
+    targetHostPath = await resolveTargetHost(vcenter.run, spec);
   } catch (error) {
     ctx.output.error(error instanceof Error ? error.message : String(error));
     return 1;
@@ -423,7 +440,7 @@ export async function runCreate(
     return previewCreate(ctx, spec, phases);
   }
 
-  return executeCreate(ctx, spec, phases, run, sleep, opts.fleet, enroll);
+  return executeCreate(ctx, spec, phases, vcenter.run, sleep, opts.fleet, enroll);
 }
 
 export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext): void {
@@ -441,6 +458,7 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
     .option('--num-cpu <n>', 'Number of CPUs')
     .option('--memory-gb <n>', 'Memory in GB')
     .option('--disk-gb <n>', "Grow the template's single disk before first boot")
+    .option('--credential-alias <alias>', 'ZnVault credential alias (default: infra/vsphere/leganes/vcenter)')
     .action(async (opts: PlanOptions) => {
       const code = await runPlan(ctx, opts);
       if (code !== 0) process.exit(1);
@@ -462,6 +480,7 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
     .option('--num-cpu <n>', 'Number of CPUs')
     .option('--memory-gb <n>', 'Memory in GB')
     .option('--disk-gb <n>', "Grow the template's single disk before first boot")
+    .option('--credential-alias <alias>', 'ZnVault credential alias (default: infra/vsphere/leganes/vcenter)')
     .option('--static-ip <cidr>', 'Static IP in CIDR form, e.g. 172.16.211.30/24')
     .option('--gateway <ip>', 'Default gateway for the static IP')
     .option('--dns <servers>', 'Comma-separated DNS servers')
@@ -505,8 +524,11 @@ export function registerVsphereCommands(vsphere: Command, ctx: CLIPluginContext)
     .requiredOption('--name <name>', 'VM name')
     .option('--ssh-user <user>', 'SSH user for the reachability/agent probes (default: sysadmin)')
     .option('--ssh-key <path>', 'SSH private key path for the probes (default: ~/.ssh/id_ed25519)')
+    .option('--credential-alias <alias>', 'ZnVault credential alias (default: infra/vsphere/leganes/vcenter)')
     .action(async (opts: StatusOptions) => {
       const code = await runStatus(ctx, opts);
       if (code !== 0) process.exit(1);
     });
+
+  registerFenceCommands(vsphere, ctx);
 }

@@ -19,13 +19,15 @@ describe('vsphere CLI plugin', () => {
     expect(PLUGIN_VERSION).not.toBe('0.0.0'); // packaging regression guard (archon lesson)
   });
 
-  it('registers "vsphere" with plan/create/enroll/status subcommands', () => {
+  it('registers provisioning and fixed LAB fence subcommands', () => {
     const plugin = createVspherePlugin();
     const program = new Command();
     plugin.registerCommands(program, fakeCtx() as never);
     const vsphere = program.commands.find((c) => c.name() === 'vsphere');
     expect(vsphere).toBeTruthy();
     const subs = vsphere!.commands.map((c) => c.name());
-    for (const s of ['plan', 'create', 'enroll', 'status']) expect(subs).toContain(s);
+    for (const s of ['plan', 'create', 'enroll', 'status', 'fence-status', 'fence-source']) {
+      expect(subs).toContain(s);
+    }
   });
 });

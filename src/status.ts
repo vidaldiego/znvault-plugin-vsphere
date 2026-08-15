@@ -25,8 +25,9 @@
 // all.
 
 import type { CLIPluginContext } from './plugin-types.js';
-import { execRun, requireGovcEnv, type RunFn } from './run.js';
+import { execRun, type RunFn } from './run.js';
 import { firstAddress, LINK_LOCAL_PREFIX } from './wait.js';
+import { resolveVcenterRun } from './vault-credentials.js';
 
 /** Raw signals collected for a single VM, before summarization. */
 export interface StatusInputs {
@@ -140,6 +141,7 @@ export interface StatusOptions {
   name: string;
   sshUser?: string;
   sshKey?: string;
+  credentialAlias?: string;
 }
 
 /**
@@ -151,7 +153,7 @@ export interface StatusOptions {
  * doesn't gate** — a degraded result (no IP yet, SSH unreachable, agent
  * unhealthy) is a normal, successful `status` run and returns `0`. The
  * command only exits `1` when the VM itself can't be found or queried:
- * missing `GOVC_URL`, a `govc vm.info` failure (connection/auth issue), or
+ * an unavailable Vault credential, a `govc vm.info` failure, or
  * an empty `virtualMachines` result (the VM doesn't exist).
  */
 export async function runStatus(
@@ -159,8 +161,9 @@ export async function runStatus(
   opts: StatusOptions,
   run: RunFn = execRun,
 ): Promise<number> {
+  let vcenter: Awaited<ReturnType<typeof resolveVcenterRun>>;
   try {
-    requireGovcEnv(process.env);
+    vcenter = await resolveVcenterRun(ctx, run, opts.credentialAlias);
   } catch (error) {
     ctx.output.error(error instanceof Error ? error.message : String(error));
     return 1;
@@ -169,7 +172,7 @@ export async function runStatus(
   const sshUser = opts.sshUser ?? DEFAULT_SSH_USER;
   const sshKey = opts.sshKey ?? DEFAULT_SSH_KEY;
 
-  const infoResult = await run('govc', ['vm.info', '-json', opts.name]);
+  const infoResult = await vcenter.run('govc', ['vm.info', '-json', opts.name]);
   if (infoResult.code !== 0) {
     ctx.output.error(
       `Failed to query VM status for '${opts.name}': ${infoResult.stderr || infoResult.stdout || 'no output'}`,
@@ -183,17 +186,17 @@ export async function runStatus(
     return 1;
   }
 
-  const ipResult = await run('govc', ['vm.ip', '-a', '-v4', '-wait=5s', opts.name]);
+  const ipResult = await vcenter.run('govc', ['vm.ip', '-a', '-v4', '-wait=5s', opts.name]);
   const ip = ipResult.code === 0 ? parseIp(ipResult.stdout) : undefined;
 
   let sshOk = false;
   let agentOk = false;
   if (ip !== undefined) {
-    const sshResult = await sshProbe(run, sshUser, sshKey, ip, 'echo ok');
+    const sshResult = await sshProbe(vcenter.run, sshUser, sshKey, ip, 'echo ok');
     sshOk = sshResult.stdout.includes('ok');
 
     if (sshOk) {
-      const agentResult = await sshProbe(run, sshUser, sshKey, ip, `curl -sf ${AGENT_HEALTH_URL}`);
+      const agentResult = await sshProbe(vcenter.run, sshUser, sshKey, ip, `curl -sf ${AGENT_HEALTH_URL}`);
       agentOk = agentResult.code === 0;
     }
   }

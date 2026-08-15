@@ -4,7 +4,7 @@
 // instead of going through commander + `process.exit` (see its doc comment
 // in src/commands.ts for the pattern this follows).
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { RunFn, RunResult } from '../src/run.js';
 import { paths } from '../src/vm-spec.js';
 import { runPlan, type PlanOptions } from '../src/commands.js';
@@ -29,7 +29,24 @@ function fakeCtx() {
   const success: string[] = [];
   return {
     ctx: {
-      client: { get: async () => ({}) as never, post: async () => ({}) as never },
+      client: {
+        get: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+        }) as never,
+        post: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+          data: {
+            url: 'https://vcenter.test',
+            username: 'test-user',
+            password: 'test-password',
+            insecure: true,
+          },
+        }) as never,
+      },
       output: {
         success: (m: string) => success.push(m),
         error: (m: string) => error.push(m),
@@ -68,21 +85,7 @@ function fakeRunAllGreen(): RunFn {
 }
 
 describe('runPlan', () => {
-  const originalGovcUrl = process.env.GOVC_URL;
-  const originalGovcUser = process.env.GOVC_USERNAME;
-  const originalGovcPassword = process.env.GOVC_PASSWORD;
-
-  afterEach(() => {
-    if (originalGovcUrl === undefined) delete process.env.GOVC_URL;
-    else process.env.GOVC_URL = originalGovcUrl;
-    if (originalGovcUser === undefined) delete process.env.GOVC_USERNAME;
-    else process.env.GOVC_USERNAME = originalGovcUser;
-    if (originalGovcPassword === undefined) delete process.env.GOVC_PASSWORD;
-    else process.env.GOVC_PASSWORD = originalGovcPassword;
-  });
-
   it('no longer prints the Task-1 stub message', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
 
     await runPlan(ctx, opts, fakeRunAllGreen());
@@ -91,7 +94,6 @@ describe('runPlan', () => {
   });
 
   it('all-green: prints a ✓ line per check and returns exit code 0', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info, success, error } = fakeCtx();
 
     const code = await runPlan(ctx, opts, fakeRunAllGreen());
@@ -105,7 +107,6 @@ describe('runPlan', () => {
   });
 
   it('a failing check is printed with ✗ and its failure message, and returns exit code 1', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run = fakeRunAllGreen();
     const failingRun: RunFn = async (cmd, args) => {
@@ -123,7 +124,6 @@ describe('runPlan', () => {
   });
 
   it('reports "Cannot connect to vCenter" and exits 1 when `govc about` fails', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run: RunFn = async () => ({ code: 1, stdout: '', stderr: 'connection refused' });
 
@@ -133,21 +133,20 @@ describe('runPlan', () => {
     expect(error).toEqual(['Cannot connect to vCenter at https://vcenter.test']);
   });
 
-  it('reports the missing GOVC_URL error and exits 1 without invoking govc', async () => {
-    delete process.env.GOVC_URL;
+  it('reports an invalid Vault credential and exits 1 without invoking govc', async () => {
     const { ctx, error } = fakeCtx();
+    ctx.client.get = async () => ({}) as never;
     const run: RunFn = async () => {
-      throw new Error('run should not be called when GOVC_URL is missing');
+      throw new Error('run should not be called when the Vault credential is invalid');
     };
 
     const code = await runPlan(ctx, opts, run);
 
     expect(code).toBe(1);
-    expect(error[0]).toMatch(/GOVC_URL/);
+    expect(error[0]).toMatch(/not the expected credential/);
   });
 
   it('rejects a non-positive-integer --disk-gb before touching govc', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run: RunFn = async () => {
       throw new Error('run should not be called for an invalid --disk-gb');
@@ -160,7 +159,6 @@ describe('runPlan', () => {
   });
 
   it('template not found: reports the resolveTemplate error and exits 1', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run: RunFn = async (_cmd, args) => {
       if (args[0] === 'about') return ok('');
@@ -175,7 +173,6 @@ describe('runPlan', () => {
   });
 
   it('disk precheck: a shrink refusal is printed and fails the plan', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run = fakeRunAllGreen();
     const withDisk: RunFn = async (cmd, args) => {
@@ -192,7 +189,6 @@ describe('runPlan', () => {
   });
 
   it('no --host given, cluster has zero hosts: fails with the script\'s "No hosts found" message', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error } = fakeCtx();
     const run = fakeRunAllGreen();
     const noHosts: RunFn = async (cmd, args) => {
@@ -207,7 +203,6 @@ describe('runPlan', () => {
   });
 
   it('--host pinned and resolved: runs the green/connected/maintenance checks instead of the no-host check, and passes', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error, success } = fakeCtx();
     const hostPath = `${p.cluster}/esx1.example.com`;
     const run = fakeRunAllGreen();
@@ -233,7 +228,6 @@ describe('runPlan', () => {
   });
 
   it('--host pinned but not found in cluster: bails early with the resolution error, before any per-step output', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error, info } = fakeCtx();
     const run = fakeRunAllGreen();
     const hostNotFound: RunFn = async (cmd, args) => {

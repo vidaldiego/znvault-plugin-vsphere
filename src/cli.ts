@@ -29,9 +29,9 @@ export default function createVspherePlugin(): CLIPlugin {
   return {
     name: 'vsphere',
     version: PLUGIN_VERSION,
-    description: 'vSphere VM provisioning (govc clone + bootstrap + zn-vault-agent enrollment)',
+    description: 'vSphere provisioning and fixed LAB source fencing through ZnVault credentials',
     registerCommands(program: Command, ctx: CLIPluginContext): void {
-      const vsphere = program.command('vsphere').description('vSphere VM provisioning');
+      const vsphere = program.command('vsphere').description('vSphere provisioning and fixed LAB source fencing');
       registerVsphereCommands(vsphere, ctx);
     },
   };

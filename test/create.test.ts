@@ -4,7 +4,7 @@
 // driven entirely by fake `RunFn`/`sleep` — no real govc/ssh/vCenter is
 // ever invoked.
 
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -317,7 +317,24 @@ function fakeCtx() {
   const warn: string[] = [];
   return {
     ctx: {
-      client: { get: async () => ({}) as never, post: async () => ({}) as never },
+      client: {
+        get: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+        }) as never,
+        post: async () => ({
+          id: 'test-vcenter-secret',
+          alias: 'infra/vsphere/leganes/vcenter',
+          type: 'credential',
+          data: {
+            url: 'https://vcenter.test',
+            username: 'test-user',
+            password: 'test-password',
+            insecure: true,
+          },
+        }) as never,
+      },
       output: {
         success: (m: string) => success.push(m),
         error: (m: string) => error.push(m),
@@ -362,8 +379,6 @@ function isSshProbe(args: string[]): boolean {
 }
 
 describe('runCreate — --confirm guard', () => {
-  afterEachRestoreGovcUrl();
-
   it('a --confirm that does not match --name touches no run at all and exits 1', async () => {
     const { ctx, error } = fakeCtx();
     let runCalled = false;
@@ -380,7 +395,6 @@ describe('runCreate — --confirm guard', () => {
   });
 
   it('a --confirm equal to --name proceeds past the guard (attempts real plan calls)', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx } = fakeCtx();
     let runCalled = false;
     // Deliberately minimal (always succeeds, empty stdout) — this test only
@@ -398,13 +412,10 @@ describe('runCreate — --confirm guard', () => {
 });
 
 describe('runCreate — SSH-key preflight', () => {
-  afterEachRestoreGovcUrl();
-
   it(
     'a missing --ssh-key exits 1 with a clear message and never calls run at all ' +
       '(not even a read-only govc call — the check runs before plan)',
     async () => {
-      process.env.GOVC_URL = 'https://vcenter.test';
       const { ctx, error } = fakeCtx();
       const missingKey = join(sshKeyHomeDir, 'does-not-exist-key');
       let runCalled = false;
@@ -423,10 +434,7 @@ describe('runCreate — SSH-key preflight', () => {
 });
 
 describe('runCreate — no --confirm (dry-run by default)', () => {
-  afterEachRestoreGovcUrl();
-
   it('runs the plan phase for real, then previews the phases via makeDryRun without any mutation, and exits 0', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info, error } = fakeCtx();
     const mutatingCalls: string[] = [];
     const run: RunFn = async (cmd, args) => {
@@ -447,8 +455,6 @@ describe('runCreate — no --confirm (dry-run by default)', () => {
 });
 
 describe('runCreate — guarded execution (confirm matches name)', () => {
-  afterEachRestoreGovcUrl();
-
   function fakeRunFullFlow(): RunFn {
     const green = fakeRunAllGreen();
     return async (cmd, args) => {
@@ -461,7 +467,6 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
   }
 
   it('clone -> power-on -> wait-ip -> wait-ssh -> bootstrap succeed: reports success and exits 0', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, success, error } = fakeCtx();
 
     const code = await runCreate(ctx, { ...opts, confirm: opts.name }, fakeRunFullFlow(), noopSleepMs);
@@ -472,7 +477,6 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
   });
 
   it('a non-zero ssh bootstrap exit code is NOT lost: reported and exits 1 with a retry hint', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error, info } = fakeCtx();
     const run: RunFn = async (cmd, args) => {
       // The `waitForSsh` probe must still succeed so the flow reaches the
@@ -490,7 +494,6 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
   });
 
   it('a timeout waiting for the VM IP reports the failure without ever calling ssh', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error, info } = fakeCtx();
     let sshCalled = false;
     const run: RunFn = async (cmd, args) => {
@@ -514,8 +517,6 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
 });
 
 describe('runCreate — --fleet chaining decision (not the enrollment pipeline itself, see enroll.test.ts)', () => {
-  afterEachRestoreGovcUrl();
-
   function fakeRunFullFlow(): RunFn {
     const green = fakeRunAllGreen();
     return async (cmd, args) => {
@@ -538,7 +539,6 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
   }
 
   it('no --fleet: enroll is never called, and the summary reports "skipped (no --fleet)"', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info } = fakeCtx();
     const { enroll, calls } = fakeEnroll(0);
 
@@ -550,7 +550,6 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
   });
 
   it('--fleet given but bootstrap failed: enroll is never called, a warning is shown, and the summary says so', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, error, info, warn } = fakeCtx();
     const { enroll, calls } = fakeEnroll(0);
     const run: RunFn = async (cmd, args) => {
@@ -569,7 +568,6 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
   });
 
   it('--fleet given and bootstrap succeeded: enroll is called once with {fleet, name, ip, sshUser, sshKey}, and success propagates (exit 0, "enrolled")', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info } = fakeCtx();
     const { enroll, calls } = fakeEnroll(0);
 
@@ -595,7 +593,6 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
   });
 
   it('--fleet given, bootstrap succeeded, but enrollment fails: exit code is 1 and the summary says "enrollment failed"', async () => {
-    process.env.GOVC_URL = 'https://vcenter.test';
     const { ctx, info } = fakeCtx();
     const { enroll, calls } = fakeEnroll(1);
 
@@ -612,12 +609,3 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
     expect(info.some((l) => l.includes('Agent: enrollment failed'))).toBe(true);
   });
 });
-
-/** Shared teardown: restore GOVC_URL after each test in the enclosing describe. */
-function afterEachRestoreGovcUrl(): void {
-  const original = process.env.GOVC_URL;
-  afterEach(() => {
-    if (original === undefined) delete process.env.GOVC_URL;
-    else process.env.GOVC_URL = original;
-  });
-}
