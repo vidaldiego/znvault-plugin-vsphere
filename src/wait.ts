@@ -13,7 +13,7 @@ const POLL_INTERVAL_MS = 5_000;
 export const LINK_LOCAL_PREFIX = '169.254.';
 
 /**
- * `"172.16.211.30,fe80::1"` -> `"172.16.211.30"` — mirrors `ip="${ip%%,*}"`.
+ * `"192.0.2.30,fe80::1"` -> `"192.0.2.30"` — mirrors `ip="${ip%%,*}"`.
  * Exported for reuse by `status.ts`'s best-effort single-shot IP check (same
  * `govc vm.ip -a -v4` multi-address stdout shape, just a single poll instead
  * of a wait loop).

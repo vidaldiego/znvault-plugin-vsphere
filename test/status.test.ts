@@ -23,33 +23,33 @@ describe('summarizeStatus', () => {
   });
 
   it('ip-no-ssh: VM has an IP but the SSH probe fails — agent is not checked', () => {
-    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '172.16.211.30', sshOk: false, agentOk: false };
+    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '192.0.2.30', sshOk: false, agentOk: false };
 
     expect(summarizeStatus(inputs)).toEqual({
       power: 'poweredOn',
-      ip: '172.16.211.30',
+      ip: '192.0.2.30',
       ssh: 'unreachable',
       agent: 'not checked (ssh unreachable)',
     });
   });
 
   it('ssh-no-agent: SSH is reachable but the agent health check fails', () => {
-    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '172.16.211.30', sshOk: true, agentOk: false };
+    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '192.0.2.30', sshOk: true, agentOk: false };
 
     expect(summarizeStatus(inputs)).toEqual({
       power: 'poweredOn',
-      ip: '172.16.211.30',
+      ip: '192.0.2.30',
       ssh: 'reachable',
       agent: 'unhealthy',
     });
   });
 
   it('all-green: power on, IP assigned, SSH reachable, agent healthy', () => {
-    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '172.16.211.30', sshOk: true, agentOk: true };
+    const inputs: StatusInputs = { powerState: 'poweredOn', ip: '192.0.2.30', sshOk: true, agentOk: true };
 
     expect(summarizeStatus(inputs)).toEqual({
       power: 'poweredOn',
-      ip: '172.16.211.30',
+      ip: '192.0.2.30',
       ssh: 'reachable',
       agent: 'healthy',
     });
@@ -173,7 +173,7 @@ describe('runStatus', () => {
     const run: RunFn = async (cmd, args) => {
       seen.push([cmd, ...args]);
       if (args[0] === 'vm.info') return ok(vmInfoJson('poweredOn'));
-      if (args[0] === 'vm.ip') return ok('172.16.211.30,fe80::1');
+      if (args[0] === 'vm.ip') return ok('192.0.2.30,fe80::1');
       if (cmd === 'ssh' && args.some((a) => a.includes('echo ok'))) return ok('ok\n');
       if (cmd === 'ssh' && args.some((a) => a.includes('curl'))) return ok('{"status":"ok"}');
       throw new Error(`unexpected call: ${cmd} ${args.join(' ')}`);
@@ -182,7 +182,7 @@ describe('runStatus', () => {
     const code = await runStatus(ctx, opts, run);
 
     expect(code).toBe(0);
-    expect(info.some((l) => l.includes('172.16.211.30'))).toBe(true);
+    expect(info.some((l) => l.includes('192.0.2.30'))).toBe(true);
     expect(info.some((l) => l.includes('reachable'))).toBe(true);
     expect(info.some((l) => l.includes('healthy'))).toBe(true);
     // vm.ip called with the documented best-effort 5s wait.
@@ -193,7 +193,7 @@ describe('runStatus', () => {
     const { ctx, info, error } = fakeCtx();
     const run: RunFn = async (cmd, args) => {
       if (args[0] === 'vm.info') return ok(vmInfoJson('poweredOn'));
-      if (args[0] === 'vm.ip') return ok('172.16.211.30');
+      if (args[0] === 'vm.ip') return ok('192.0.2.30');
       if (cmd === 'ssh' && args.some((a) => a.includes('echo ok'))) return fail('Connection refused');
       if (cmd === 'ssh' && args.some((a) => a.includes('curl'))) throw new Error('agent curl should not run when ssh is unreachable');
       throw new Error(`unexpected call: ${cmd} ${args.join(' ')}`);

@@ -35,11 +35,11 @@ describe('cloneArgs', () => {
 
 describe('bootstrapCommand', () => {
   it('always appends --yes and forwards static network flags', () => {
-    const cmd = bootstrapCommand({ ...base, staticIp: '172.16.211.30/24', gateway: '172.16.211.1', dns: '172.16.50.250' });
+    const cmd = bootstrapCommand({ ...base, staticIp: '192.0.2.30/24', gateway: '192.0.2.1', dns: '203.0.113.53' });
     expect(cmd).toContain('install.sh | bash -s -- --hostname trust-api-1');
-    expect(cmd).toContain('--static-ip 172.16.211.30/24');
-    expect(cmd).toContain('--gateway 172.16.211.1');
-    expect(cmd).toContain('--dns "172.16.50.250"');
+    expect(cmd).toContain('--static-ip 192.0.2.30/24');
+    expect(cmd).toContain('--gateway 192.0.2.1');
+    expect(cmd).toContain('--dns "203.0.113.53"');
     expect(cmd.trim().endsWith('--yes')).toBe(true);
   });
   it('omits absent flags', () => {

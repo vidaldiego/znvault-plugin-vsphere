@@ -59,11 +59,15 @@ for this path is a tracked future evolution, not implemented here.
 
 ## Commands
 
-The examples below use the parameters from the deployment this plugin was
-built for — provisioning the `trust` portal's API tier (see
+The examples below are shaped after the deployment this plugin was built for
+— provisioning the `trust` portal's API tier (see
 `docs/superpowers/specs/2026-08-13-trust-deployment-design.md` §6): a new
 `trust-api-1` VM on the `Primary` cluster in the `ZincApp` datacenter,
 cloned from `ubuntu-template-base`, joining the `trust-fleet` host config.
+
+All IP addresses shown are **RFC 5737 documentation ranges** (`192.0.2.0/24`,
+`203.0.113.0/24`), not the real ones — substitute your own network's values
+for `--static-ip`, `--gateway` and `--dns`.
 
 ### `plan` — read-only preflight
 
@@ -100,9 +104,9 @@ znvault vsphere create \
   --datastore vsanDatastore \
   --num-cpu 2 \
   --memory-gb 4 \
-  --static-ip 172.16.211.30/24 \
-  --gateway 172.16.211.1 \
-  --dns 172.16.50.250 \
+  --static-ip 192.0.2.30/24 \
+  --gateway 192.0.2.1 \
+  --dns 203.0.113.53 \
   --fleet trust-fleet
 
 # Same command, executed for real:
@@ -114,9 +118,9 @@ znvault vsphere create \
   --datastore vsanDatastore \
   --num-cpu 2 \
   --memory-gb 4 \
-  --static-ip 172.16.211.30/24 \
-  --gateway 172.16.211.1 \
-  --dns 172.16.50.250 \
+  --static-ip 192.0.2.30/24 \
+  --gateway 192.0.2.1 \
+  --dns 203.0.113.53 \
   --fleet trust-fleet \
   --confirm trust-api-1
 ```
@@ -151,7 +155,7 @@ after a bootstrap fix, or a VM created outside this plugin):
 znvault vsphere enroll \
   --fleet trust-fleet \
   --name trust-api-1 \
-  --ip 172.16.211.30
+  --ip 192.0.2.30
 ```
 
 Requests a one-time bootstrap token for `trust-fleet` (`POST
@@ -171,11 +175,11 @@ network/CA flags `create` takes:
 znvault vsphere enroll \
   --fleet trust-fleet \
   --name trust-api-1 \
-  --ip 172.16.211.30 \
+  --ip 192.0.2.30 \
   --retry-bootstrap \
-  --static-ip 172.16.211.30/24 \
-  --gateway 172.16.211.1 \
-  --dns 172.16.50.250
+  --static-ip 192.0.2.30/24 \
+  --gateway 192.0.2.1 \
+  --dns 203.0.113.53
 ```
 
 #### Enrollment gotchas (encoded, not just documented)
@@ -216,7 +220,7 @@ znvault vsphere status --name trust-api-1
 ```
 Status for trust-api-1:
   Power: poweredOn
-  IP:    172.16.211.30
+  IP:    192.0.2.30
   SSH:   reachable
   Agent: healthy
 ```
@@ -239,10 +243,10 @@ reachability/agent probes, same defaults as `create`/`enroll`.
 znvault vsphere fence-status
 ```
 
-Read-only. Resolves the fixed Vault alias and requires the endpoint to be
-exactly `https://vcenter.zincapp.com` (currently `172.16.51.51`), then checks
+Read-only. Resolves the fixed Vault alias and requires the endpoint to match
+the pinned `FENCE_VCENTER_ENDPOINT` constant exactly, then checks
 the MoRef, name, BIOS UUID, instance UUID and power state of the four fixed
-Leganés LAB source VMs. It
+LAB source VMs. It
 returns `FENCED / NONE / GO` only when all four are powered off; otherwise
 it returns `UNFENCED / NONE / NO_GO` with exit `78`.
 

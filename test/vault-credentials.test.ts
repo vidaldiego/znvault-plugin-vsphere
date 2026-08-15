@@ -16,7 +16,7 @@ const metadata = {
 const decrypted = {
   ...metadata,
   data: {
-    url: 'https://172.16.51.51',
+    url: 'https://203.0.113.51',
     username: 'sentinel-dr-fence',
     password: 'test-only-password',
     insecure: true,
@@ -52,7 +52,7 @@ describe('readVcenterCredential', () => {
 
     expect(value).toEqual({
       alias: DEFAULT_VCENTER_CREDENTIAL_ALIAS,
-      url: 'https://172.16.51.51',
+      url: 'https://203.0.113.51',
       username: 'sentinel-dr-fence',
       password: 'test-only-password',
       insecure: true,
@@ -73,7 +73,7 @@ describe('readVcenterCredential', () => {
   it('rejects a URL containing embedded credentials', async () => {
     const changed = {
       ...decrypted,
-      data: { ...decrypted.data, url: 'https://user:password@172.16.51.51' },
+      data: { ...decrypted.data, url: 'https://user:password@203.0.113.51' },
     };
     await expect(readVcenterCredential(context({ decrypted: changed }))).rejects.toThrow(
       /HTTPS URL without credentials/,
@@ -99,7 +99,7 @@ describe('bindGovcCredential', () => {
     const before = process.env.GOVC_PASSWORD;
     const bound = bindGovcCredential(run, {
       alias: DEFAULT_VCENTER_CREDENTIAL_ALIAS,
-      url: 'https://172.16.51.51',
+      url: 'https://203.0.113.51',
       username: 'sentinel-dr-fence',
       password: 'test-only-password',
       insecure: false,
@@ -109,7 +109,7 @@ describe('bindGovcCredential', () => {
     await bound('ssh', ['host', 'true']);
 
     expect(calls[0]?.env).toEqual({
-      GOVC_URL: 'https://172.16.51.51',
+      GOVC_URL: 'https://203.0.113.51',
       GOVC_USERNAME: 'sentinel-dr-fence',
       GOVC_PASSWORD: 'test-only-password',
       GOVC_INSECURE: '0',

@@ -460,7 +460,7 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
     return async (cmd, args) => {
       if (cmd === 'govc' && args[0] === 'vm.clone') return ok();
       if (cmd === 'govc' && args[0] === 'vm.power') return ok();
-      if (cmd === 'govc' && args[0] === 'vm.ip') return ok('172.16.211.30');
+      if (cmd === 'govc' && args[0] === 'vm.ip') return ok('192.0.2.30');
       if (cmd === 'ssh') return ok('ok');
       return green(cmd, args);
     };
@@ -473,7 +473,7 @@ describe('runCreate — guarded execution (confirm matches name)', () => {
 
     expect(error).toEqual([]);
     expect(code).toBe(0);
-    expect(success.some((l) => l.includes('172.16.211.30'))).toBe(true);
+    expect(success.some((l) => l.includes('192.0.2.30'))).toBe(true);
   });
 
   it('a non-zero ssh bootstrap exit code is NOT lost: reported and exits 1 with a retry hint', async () => {
@@ -522,7 +522,7 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
     return async (cmd, args) => {
       if (cmd === 'govc' && args[0] === 'vm.clone') return ok();
       if (cmd === 'govc' && args[0] === 'vm.power') return ok();
-      if (cmd === 'govc' && args[0] === 'vm.ip') return ok('172.16.211.30');
+      if (cmd === 'govc' && args[0] === 'vm.ip') return ok('192.0.2.30');
       if (cmd === 'ssh') return ok('ok');
       return green(cmd, args);
     };
@@ -585,7 +585,7 @@ describe('runCreate — --fleet chaining decision (not the enrollment pipeline i
     expect(enrollOpts).toEqual({
       fleet: 'trust-fleet',
       name: 'trust-api-1',
-      ip: '172.16.211.30',
+      ip: '192.0.2.30',
       sshUser: 'sysadmin',
       sshKey: '~/.ssh/id_ed25519',
     });

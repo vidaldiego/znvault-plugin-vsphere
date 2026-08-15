@@ -17,11 +17,11 @@ describe('makeDryRun', () => {
     const run = makeDryRun((line) => lines.push(line));
 
     await run('govc', ['vm.power', '-on', '/ZincApp/vm/trust-api-1']);
-    await run('ssh', ['sysadmin@10.0.0.5', 'echo ok']);
+    await run('ssh', ['sysadmin@192.0.2.5', 'echo ok']);
 
     expect(lines).toEqual([
       '[dry-run] govc vm.power -on /ZincApp/vm/trust-api-1',
-      '[dry-run] ssh sysadmin@10.0.0.5 echo ok',
+      '[dry-run] ssh sysadmin@192.0.2.5 echo ok',
     ]);
   });
 });

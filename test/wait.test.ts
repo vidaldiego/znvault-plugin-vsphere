@@ -35,12 +35,12 @@ function sequencedRun(stdouts: string[]): { run: RunFn; callCount: () => number 
 
 describe('waitForIp', () => {
   it('resolves the first non-link-local IPv4 address, discarding earlier empty/link-local polls', async () => {
-    const { run, callCount } = sequencedRun(['', '169.254.1.5', '172.16.211.30,fe80::1']);
+    const { run, callCount } = sequencedRun(['', '169.254.1.5', '192.0.2.30,fe80::1']);
     const { sleep, calls } = fakeSleep();
 
     const ip = await waitForIp(run, vmPath, 60_000, sleep);
 
-    expect(ip).toBe('172.16.211.30');
+    expect(ip).toBe('192.0.2.30');
     expect(callCount()).toBe(3);
     // Sleeps between the failed polls, not after the successful one.
     expect(calls.length).toBe(2);
@@ -50,7 +50,7 @@ describe('waitForIp', () => {
     const seen: string[][] = [];
     const run: RunFn = async (cmd, args) => {
       seen.push([cmd, ...args]);
-      return { code: 0, stdout: '172.16.211.30', stderr: '' };
+      return { code: 0, stdout: '192.0.2.30', stderr: '' };
     };
     const { sleep } = fakeSleep();
 
@@ -60,10 +60,10 @@ describe('waitForIp', () => {
   });
 
   it('takes only the value before the first comma and trims whitespace', async () => {
-    const run: RunFn = async () => ({ code: 0, stdout: '  172.16.211.31,fe80::2  \n', stderr: '' });
+    const run: RunFn = async () => ({ code: 0, stdout: '  192.0.2.31,fe80::2  \n', stderr: '' });
     const { sleep } = fakeSleep();
 
-    await expect(waitForIp(run, vmPath, 60_000, sleep)).resolves.toBe('172.16.211.31');
+    await expect(waitForIp(run, vmPath, 60_000, sleep)).resolves.toBe('192.0.2.31');
   });
 
   it('throws on timeout when every poll is empty or link-local', async () => {
@@ -80,11 +80,11 @@ describe('waitForIp', () => {
     const run: RunFn = async () => {
       calls += 1;
       if (calls === 1) return { code: 1, stdout: '', stderr: 'guest tools not ready' };
-      return { code: 0, stdout: '172.16.211.32', stderr: '' };
+      return { code: 0, stdout: '192.0.2.32', stderr: '' };
     };
     const { sleep } = fakeSleep();
 
-    await expect(waitForIp(run, vmPath, 60_000, sleep)).resolves.toBe('172.16.211.32');
+    await expect(waitForIp(run, vmPath, 60_000, sleep)).resolves.toBe('192.0.2.32');
     expect(calls).toBe(2);
   });
 });
@@ -92,7 +92,7 @@ describe('waitForIp', () => {
 describe('waitForSsh', () => {
   const user = 'sysadmin';
   const key = '/home/x/.ssh/id_ed25519';
-  const host = '172.16.211.30';
+  const host = '192.0.2.30';
 
   it('resolves once the probe stdout contains "ok"', async () => {
     const { run, callCount } = sequencedRun(['', '', 'ok\n']);

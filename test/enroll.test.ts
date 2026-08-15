@@ -178,7 +178,7 @@ describe('sshRun', () => {
     const opts: EnrollOpts = {
       fleet: 'trust-fleet',
       hostname: 'trust-api-1',
-      ip: '172.16.211.30',
+      ip: '192.0.2.30',
       sshUser: 'sysadmin',
       sshKey: '/home/x/.ssh/id_ed25519',
     };
@@ -220,7 +220,7 @@ function fakeCtx() {
 const baseOpts: EnrollCommandOptions = {
   fleet: 'trust-fleet',
   name: 'trust-api-1',
-  ip: '172.16.211.30',
+  ip: '192.0.2.30',
 };
 
 /** Every ssh call (any command) succeeds with empty stdout, except the final verification step, which echoes a health payload. */
@@ -386,9 +386,9 @@ describe('runEnroll', () => {
         {
           ...baseOpts,
           retryBootstrap: true,
-          staticIp: '172.16.211.30/24',
-          gateway: '172.16.211.1',
-          dns: '172.16.50.250',
+          staticIp: '192.0.2.30/24',
+          gateway: '192.0.2.1',
+          dns: '203.0.113.53',
           skipSshCa: true,
           skipPkiCa: true,
           bootstrapArgs: '--extra flag',
@@ -397,9 +397,9 @@ describe('runEnroll', () => {
       );
 
       const bootstrapLine = seenCommands[0] ?? '';
-      expect(bootstrapLine).toContain('--static-ip 172.16.211.30/24');
-      expect(bootstrapLine).toContain('--gateway 172.16.211.1');
-      expect(bootstrapLine).toContain('--dns "172.16.50.250"');
+      expect(bootstrapLine).toContain('--static-ip 192.0.2.30/24');
+      expect(bootstrapLine).toContain('--gateway 192.0.2.1');
+      expect(bootstrapLine).toContain('--dns "203.0.113.53"');
       expect(bootstrapLine).toContain('--no-ssh-ca');
       expect(bootstrapLine).toContain('--no-pki-ca');
       expect(bootstrapLine).toContain('--extra flag');
@@ -416,7 +416,7 @@ describe('runEnroll', () => {
 
     await runEnroll(ctx as never, baseOpts, run);
 
-    expect(seenTargets.every((t) => t === 'sysadmin@172.16.211.30')).toBe(true);
+    expect(seenTargets.every((t) => t === 'sysadmin@192.0.2.30')).toBe(true);
   });
 
   it('honors explicit --ssh-user/--ssh-key overrides', async () => {
@@ -436,7 +436,7 @@ describe('runEnroll', () => {
     await runEnroll(ctx as never, { ...baseOpts, sshUser: 'ops', sshKey: customKey }, run);
 
     expect(seenKeys.every((k) => k === customKey)).toBe(true);
-    expect(seenTargets.every((t) => t === 'ops@172.16.211.30')).toBe(true);
+    expect(seenTargets.every((t) => t === 'ops@192.0.2.30')).toBe(true);
   });
 
   it(
